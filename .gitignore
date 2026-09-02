@@ -1,0 +1,21 @@
+# build artifacts
+/ivis
+/ivis.exe
+/dist/
+
+# frontend
+node_modules/
+web/node_modules/
+web/dist/
+
+# local runtime data
+*.db
+*.db-shm
+*.db-wal
+/data/
+
+# editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
