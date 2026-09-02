@@ -6,7 +6,6 @@
 # frontend
 node_modules/
 web/node_modules/
-web/dist/
 
 # local runtime data
 *.db
@@ -19,3 +18,8 @@ web/dist/
 Thumbs.db
 .idea/
 .vscode/
+
+# フロントエンドの成果物。go:embed の対象なのでディレクトリ自体は追跡する。
+# ディレクトリごと無視すると git が中を見ないため、否定パターンが効かない。
+web/dist/*
+!web/dist/.gitkeep

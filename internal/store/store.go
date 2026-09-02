@@ -1,0 +1,307 @@
+// Package store はセッションと会話履歴を SQLite に永続化する。
+//
+// エージェント定義とスキルはファイルが正だが、履歴はここが正である。
+// 一覧表示のたびに全ファイルを走査させないための選択。
+package store
+
+import (
+	"context"
+	"crypto/rand"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/LyraStellate/Ivis/internal/provider"
+
+	_ "modernc.org/sqlite" // 純 Go の SQLite ドライバ。単一バイナリの前提を崩さない。
+)
+
+// ErrNotFound は対象が存在しないこと。
+var ErrNotFound = errors.New("見つかりません")
+
+// Session は 1 つの会話。エージェント定義が後から削除されても ID は保持し続ける。
+type Session struct {
+	ID        string    `json:"id"`
+	Title     string    `json:"title"`
+	AgentID   string    `json:"agent_id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Message は会話の 1 発言。
+//
+// ParentID は委譲の構造を表す。子エージェントの実行過程を親の会話に平坦に
+// 混ぜると後から構造を復元できないため、親メッセージにぶら下げて保持する。
+type Message struct {
+	ID        string              `json:"id"`
+	SessionID string              `json:"session_id"`
+	ParentID  string              `json:"parent_id,omitempty"`
+	Seq       int64               `json:"seq"`
+	Role      string              `json:"role"`
+	Content   string              `json:"content"`
+	ToolCalls []provider.ToolCall `json:"tool_calls,omitempty"`
+	ToolName  string              `json:"tool_name,omitempty"`
+	AgentID   string              `json:"agent_id"`
+	Model     string              `json:"model,omitempty"`
+	Error     string              `json:"error,omitempty"`
+	CreatedAt time.Time           `json:"created_at"`
+}
+
+// Store は履歴データベース。
+type Store struct {
+	db *sql.DB
+}
+
+const schema = `
+PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id         TEXT PRIMARY KEY,
+  title      TEXT NOT NULL,
+  agent_id   TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id           TEXT PRIMARY KEY,
+  session_id   TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  parent_id    TEXT NOT NULL DEFAULT '',
+  seq          INTEGER NOT NULL,
+  role         TEXT NOT NULL,
+  content      TEXT NOT NULL,
+  tool_calls   TEXT NOT NULL DEFAULT '',
+  tool_name    TEXT NOT NULL DEFAULT '',
+  agent_id     TEXT NOT NULL DEFAULT '',
+  model        TEXT NOT NULL DEFAULT '',
+  error        TEXT NOT NULL DEFAULT '',
+  created_at   INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, seq);
+CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
+`
+
+// Open はデータベースを開き、必要ならスキーマを作る。
+func Open(path string) (*Store, error) {
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		return nil, fmt.Errorf("履歴データベースを開けませんでした: %w", err)
+	}
+	// 書き込みの競合を避けるため、接続は 1 本に絞る。単一利用者の前提と釣り合う。
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(schema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("履歴データベースを初期化できませんでした: %w", err)
+	}
+	return &Store{db: db}, nil
+}
+
+// Close はデータベースを閉じる。
+func (s *Store) Close() error { return s.db.Close() }
+
+// NewID は新しい識別子を返す。
+func NewID() string {
+	var b [12]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// 乱数が読めない環境は想定しない。時刻で代替する。
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b[:])
+}
+
+// CreateSession は新しいセッションを作る。
+func (s *Store) CreateSession(ctx context.Context, agentID, title string) (*Session, error) {
+	if title == "" {
+		title = "新しい会話"
+	}
+	now := time.Now()
+	sess := &Session{ID: NewID(), Title: title, AgentID: agentID, CreatedAt: now, UpdatedAt: now}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO sessions (id, title, agent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+		sess.ID, sess.Title, sess.AgentID, now.UnixMilli(), now.UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	return sess, nil
+}
+
+// ListSessions は更新の新しい順に一覧を返す。
+func (s *Store) ListSessions(ctx context.Context) ([]*Session, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, title, agent_id, created_at, updated_at FROM sessions ORDER BY updated_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*Session
+	for rows.Next() {
+		var sess Session
+		var created, updated int64
+		if err := rows.Scan(&sess.ID, &sess.Title, &sess.AgentID, &created, &updated); err != nil {
+			return nil, err
+		}
+		sess.CreatedAt = time.UnixMilli(created)
+		sess.UpdatedAt = time.UnixMilli(updated)
+		out = append(out, &sess)
+	}
+	return out, rows.Err()
+}
+
+// GetSession は 1 件返す。
+func (s *Store) GetSession(ctx context.Context, id string) (*Session, error) {
+	var sess Session
+	var created, updated int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, title, agent_id, created_at, updated_at FROM sessions WHERE id = ?`, id).
+		Scan(&sess.ID, &sess.Title, &sess.AgentID, &created, &updated)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	sess.CreatedAt = time.UnixMilli(created)
+	sess.UpdatedAt = time.UnixMilli(updated)
+	return &sess, nil
+}
+
+// UpdateSession はタイトルとエージェントを更新する。空文字の項目は変更しない。
+func (s *Store) UpdateSession(ctx context.Context, id, title, agentID string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE sessions
+		    SET title = CASE WHEN ? <> '' THEN ? ELSE title END,
+		        agent_id = CASE WHEN ? <> '' THEN ? ELSE agent_id END,
+		        updated_at = ?
+		  WHERE id = ?`,
+		title, title, agentID, agentID, time.Now().UnixMilli(), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteSession はセッションとそのメッセージだけを消す。
+// エージェント定義とスキルには一切影響しない。
+func (s *Store) DeleteSession(ctx context.Context, id string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	_, err = s.db.ExecContext(ctx, `DELETE FROM messages WHERE session_id = ?`, id)
+	return err
+}
+
+// AppendMessage は発言を追加する。ID と連番と時刻はここで割り当てる。
+func (s *Store) AppendMessage(ctx context.Context, m *Message) error {
+	if m.ID == "" {
+		m.ID = NewID()
+	}
+	if m.CreatedAt.IsZero() {
+		m.CreatedAt = time.Now()
+	}
+	var seq sql.NullInt64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT MAX(seq) FROM messages WHERE session_id = ?`, m.SessionID).Scan(&seq); err != nil {
+		return err
+	}
+	m.Seq = seq.Int64 + 1
+
+	var calls string
+	if len(m.ToolCalls) > 0 {
+		b, err := json.Marshal(m.ToolCalls)
+		if err != nil {
+			return err
+		}
+		calls = string(b)
+	}
+
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO messages (id, session_id, parent_id, seq, role, content, tool_calls,
+		                       tool_name, agent_id, model, error, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		m.ID, m.SessionID, m.ParentID, m.Seq, m.Role, m.Content, calls, m.ToolName,
+		m.AgentID, m.Model, m.Error, m.CreatedAt.UnixMilli())
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE sessions SET updated_at = ? WHERE id = ?`,
+		time.Now().UnixMilli(), m.SessionID)
+	return err
+}
+
+// UpdateMessage は本文とエラーを書き換える。生成の途中でプロセスが落ちても
+// それまでの内容が失われないよう、ストリーミング中も一定間隔でこれを呼ぶ。
+func (s *Store) UpdateMessage(ctx context.Context, id, content, errText string, calls []provider.ToolCall) error {
+	var raw string
+	if len(calls) > 0 {
+		b, err := json.Marshal(calls)
+		if err != nil {
+			return err
+		}
+		raw = string(b)
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE messages SET content = ?, error = ?, tool_calls = ? WHERE id = ?`,
+		content, errText, raw, id)
+	return err
+}
+
+const messageColumns = `id, session_id, parent_id, seq, role, content, tool_calls,
+                        tool_name, agent_id, model, error, created_at`
+
+// ListMessages はセッションの全発言を連番順に返す。委譲の子も含む。
+// UI 側で parent_id により折りたたんで表示する。
+func (s *Store) ListMessages(ctx context.Context, sessionID string) ([]*Message, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+messageColumns+` FROM messages WHERE session_id = ? ORDER BY seq ASC`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return scanMessages(rows)
+}
+
+// ConversationMessages は最上位の発言だけを返す。次のターンの入力を組み立てる
+// のに使う。子エージェントの途中経過は親の文脈を圧迫しないよう含めない。
+func (s *Store) ConversationMessages(ctx context.Context, sessionID string) ([]*Message, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+messageColumns+` FROM messages
+		  WHERE session_id = ? AND parent_id = '' ORDER BY seq ASC`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return scanMessages(rows)
+}
+
+func scanMessages(rows *sql.Rows) ([]*Message, error) {
+	defer rows.Close()
+	var out []*Message
+	for rows.Next() {
+		var m Message
+		var calls string
+		var created int64
+		if err := rows.Scan(&m.ID, &m.SessionID, &m.ParentID, &m.Seq, &m.Role, &m.Content,
+			&calls, &m.ToolName, &m.AgentID, &m.Model, &m.Error, &created); err != nil {
+			return nil, err
+		}
+		if calls != "" {
+			if err := json.Unmarshal([]byte(calls), &m.ToolCalls); err != nil {
+				return nil, err
+			}
+		}
+		m.CreatedAt = time.UnixMilli(created)
+		out = append(out, &m)
+	}
+	return out, rows.Err()
+}
