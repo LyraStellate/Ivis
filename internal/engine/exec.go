@@ -11,12 +11,18 @@ import (
 )
 
 // runToolCalls はモデルが要求したツールを順に実行し、結果を会話へ戻す。
-func (e *Engine) runToolCalls(ctx context.Context, rc *runCtx, calls []provider.ToolCall) error {
-	for _, call := range calls {
-		rc.emit(Event{Type: EvtToolCall, Depth: rc.depth, AgentID: rc.agent.ID,
-			Tool: call.Name, Args: call.Arguments})
+//
+// originID は呼び出しを要求した発言の識別子。提供元が返す呼び出し ID は
+// 1 回の生成の中でしか一意でなく、反復すると同じ値が再び現れる。1 ターンを
+// 通して一意な名前を、発言の識別子と位置から作る。
+func (e *Engine) runToolCalls(ctx context.Context, rc *runCtx, originID string, calls []provider.ToolCall) error {
+	for i, call := range calls {
+		callID := fmt.Sprintf("%s.%d", originID, i)
 
-		result, err := e.runOneTool(ctx, rc, call)
+		rc.emit(Event{Type: EvtToolCall, Depth: rc.depth, AgentID: rc.agent.ID,
+			Tool: call.Name, ToolCallID: callID, Args: call.Arguments})
+
+		result, err := e.runOneTool(ctx, rc, callID, call)
 		if err != nil {
 			// 実行の失敗もモデルにとっては情報である。こちらで打ち切るより、
 			// 内容を返して自己修正の機会を与える。
@@ -36,7 +42,8 @@ func (e *Engine) runToolCalls(ctx context.Context, rc *runCtx, calls []provider.
 		rc.msgs = append(rc.msgs, provider.Message{
 			Role: provider.RoleTool, Content: result, ToolName: call.Name,
 		})
-		rc.emit(Event{Type: EvtToolResult, Depth: rc.depth, Tool: call.Name, Result: result})
+		rc.emit(Event{Type: EvtToolResult, Depth: rc.depth, Tool: call.Name,
+			ToolCallID: callID, Result: result})
 
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -45,7 +52,7 @@ func (e *Engine) runToolCalls(ctx context.Context, rc *runCtx, calls []provider.
 	return nil
 }
 
-func (e *Engine) runOneTool(ctx context.Context, rc *runCtx, call provider.ToolCall) (string, error) {
+func (e *Engine) runOneTool(ctx context.Context, rc *runCtx, callID string, call provider.ToolCall) (string, error) {
 	tool, ok := e.Tools.Get(call.Name)
 	if !ok {
 		return "", fmt.Errorf("ツール %q は存在しません", call.Name)
@@ -56,13 +63,15 @@ func (e *Engine) runOneTool(ctx context.Context, rc *runCtx, call provider.ToolC
 
 	if tool.NeedsApproval() && e.Cfg.RequireApproval && e.Approver != nil {
 		req := ApprovalRequest{
-			ID:        store.NewID(),
-			SessionID: rc.sessionID,
-			AgentID:   rc.agent.ID,
-			Tool:      call.Name,
-			Arguments: call.Arguments,
+			ID:         store.NewID(),
+			SessionID:  rc.sessionID,
+			AgentID:    rc.agent.ID,
+			ToolCallID: callID,
+			Tool:       call.Name,
+			Arguments:  call.Arguments,
 		}
-		rc.emit(Event{Type: EvtApproval, Depth: rc.depth, Tool: call.Name, Approval: &req})
+		rc.emit(Event{Type: EvtApproval, Depth: rc.depth, Tool: call.Name,
+			ToolCallID: callID, Approval: &req})
 
 		ok, err := e.Approver.Request(ctx, req)
 		if err != nil {
@@ -82,7 +91,9 @@ func (e *Engine) runOneTool(ctx context.Context, rc *runCtx, call provider.ToolC
 		AgentID:       rc.agent.ID,
 		CanDelegateTo: rc.agent.CanDelegateTo,
 		Delegate: func(ctx context.Context, agentID, task string) (string, error) {
-			return e.delegate(ctx, rc, agentID, task)
+			// 呼び出しの識別子を渡し、委譲の開始と終了もその呼び出しに
+			// 結び付けられるようにする。
+			return e.delegate(ctx, rc, callID, agentID, task)
 		},
 	}
 	return tool.Execute(ctx, ec, call.Arguments)
@@ -92,7 +103,7 @@ func (e *Engine) runOneTool(ctx context.Context, rc *runCtx, call provider.ToolC
 //
 // 子の途中経過は親の文脈を圧迫しないよう戻さない。履歴には親メッセージに
 // ぶら下げて保存するため、UI からは追える。
-func (e *Engine) delegate(ctx context.Context, parent *runCtx, agentID, task string) (string, error) {
+func (e *Engine) delegate(ctx context.Context, parent *runCtx, callID, agentID, task string) (string, error) {
 	if parent.depth+1 > e.Cfg.MaxDelegationDepth {
 		return "", fmt.Errorf("委譲の深さが上限 (%d) に達しました", e.Cfg.MaxDelegationDepth)
 	}
@@ -118,7 +129,7 @@ func (e *Engine) delegate(ctx context.Context, parent *runCtx, agentID, task str
 		return "", fmt.Errorf("委譲を記録できませんでした: %w", err)
 	}
 	parent.emit(Event{Type: EvtDelegateStart, Depth: parent.depth, AgentID: child.ID,
-		MessageID: marker.ID, Text: task})
+		MessageID: marker.ID, ToolCallID: callID, Text: task})
 
 	rc := &runCtx{
 		sessionID: parent.sessionID,
@@ -132,7 +143,7 @@ func (e *Engine) delegate(ctx context.Context, parent *runCtx, agentID, task str
 
 	result, err := e.loop(ctx, rc)
 	parent.emit(Event{Type: EvtDelegateEnd, Depth: parent.depth, AgentID: child.ID,
-		MessageID: marker.ID, Result: result})
+		MessageID: marker.ID, ToolCallID: callID, Result: result})
 	if err != nil {
 		return "", fmt.Errorf("エージェント %q の実行が失敗しました: %w", child.ID, err)
 	}

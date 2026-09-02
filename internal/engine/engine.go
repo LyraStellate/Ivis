@@ -20,11 +20,15 @@ import (
 
 // ApprovalRequest は 1 件の承認要求。
 type ApprovalRequest struct {
-	ID        string         `json:"id"`
-	SessionID string         `json:"session_id"`
-	AgentID   string         `json:"agent_id"`
-	Tool      string         `json:"tool"`
-	Arguments map[string]any `json:"arguments"`
+	ID        string `json:"id"`
+	SessionID string `json:"session_id"`
+	// ToolCallID はどのツール呼び出しに対する承認かを指す。承認の表示を
+	// 対応する呼び出しの直下に出すために要る。ツール名だけでは、同じツールが
+	// 同一ターンで 2 回呼ばれたときにどちらか特定できない。
+	ToolCallID string         `json:"tool_call_id"`
+	AgentID    string         `json:"agent_id"`
+	Tool       string         `json:"tool"`
+	Arguments  map[string]any `json:"arguments"`
 }
 
 // Approver は利用者へ承認を求める窓口。HTTP 層が実装する。
@@ -49,17 +53,19 @@ const (
 
 // Event はストリームで UI へ送る 1 件。
 type Event struct {
-	Type      string           `json:"type"`
-	MessageID string           `json:"message_id,omitempty"`
-	AgentID   string           `json:"agent_id,omitempty"`
-	ParentID  string           `json:"parent_id,omitempty"`
-	Depth     int              `json:"depth"`
-	Text      string           `json:"text,omitempty"`
-	Tool      string           `json:"tool,omitempty"`
-	Args      map[string]any   `json:"args,omitempty"`
-	Result    string           `json:"result,omitempty"`
-	Error     string           `json:"error,omitempty"`
-	Approval  *ApprovalRequest `json:"approval,omitempty"`
+	Type      string `json:"type"`
+	MessageID string `json:"message_id,omitempty"`
+	AgentID   string `json:"agent_id,omitempty"`
+	ParentID  string `json:"parent_id,omitempty"`
+	Depth     int    `json:"depth"`
+	Text      string `json:"text,omitempty"`
+	Tool      string `json:"tool,omitempty"`
+	// ToolCallID は tool_call と tool_result と approval_request を結び付ける。
+	ToolCallID string           `json:"tool_call_id,omitempty"`
+	Args       map[string]any   `json:"args,omitempty"`
+	Result     string           `json:"result,omitempty"`
+	Error      string           `json:"error,omitempty"`
+	Approval   *ApprovalRequest `json:"approval,omitempty"`
 }
 
 // Emit はイベントを 1 件送る。

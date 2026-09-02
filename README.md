@@ -38,7 +38,7 @@ Ivis 側から書き戻すことはない。
 cd web && npm run dev
 ```
 
-テストは `go test ./...`。
+テストは `go test ./...` と、フロントエンド側の `cd web && npm test`。
 
 ## 現状
 

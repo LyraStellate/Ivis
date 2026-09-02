@@ -1,6 +1,7 @@
 # build artifacts
 /ivis
 /ivis.exe
+/ivis.exe~
 /dist/
 
 # frontend

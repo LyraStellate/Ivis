@@ -1,21 +1,27 @@
 <script>
+  import { onMount } from 'svelte'
   import * as api from './lib/api.js'
+  import { Transcript } from './lib/conversation.js'
   import Sidebar from './lib/Sidebar.svelte'
-  import Chat from './lib/Chat.svelte'
-  import Settings from './lib/Settings.svelte'
+  import ChatView from './lib/ChatView.svelte'
+  import SettingsPanel from './lib/SettingsPanel.svelte'
+  import Confirm from './lib/Confirm.svelte'
 
   let status = $state(null)
   let agents = $state([])
   let sessions = $state([])
   let currentId = $state(null)
   let session = $state(null)
-  let messages = $state([])
-  // live はストリーミング中だけの表示。確定した内容はサーバーから読み直す。
-  let live = $state([])
+
+  // 画面が持つ発言の配列はこれ 1 つ。確定履歴もストリームもここへ集める。
+  let items = $state([])
+  const tx = new Transcript(items)
+
   let busy = $state(false)
-  let approval = $state(null)
   let notice = $state(null)
-  let showSettings = $state(false)
+  let settingsOpen = $state(false)
+  let pendingDelete = $state(null)
+  let railHidden = $state(false)
 
   let controller = null
 
@@ -23,7 +29,7 @@
     try {
       return await fn()
     } catch (e) {
-      notice = { kind: e.kind, text: e.message }
+      if (e.name !== 'AbortError') notice = { kind: e.kind, text: e.message }
       return null
     }
   }
@@ -35,18 +41,19 @@
   }
 
   async function openSession(id) {
+    if (busy) return
     currentId = id
-    live = []
-    approval = null
-    session = await guard(() => api.listSessions().then((l) => l.find((s) => s.id === id)))
-    messages = (await guard(() => api.listMessages(id))) ?? []
+    session = sessions.find((s) => s.id === id) ?? (await guard(() => api.getSession(id)))
+    const history = await guard(() => api.listMessages(id))
+    tx.loadHistory(history ?? [])
+    notice = null
   }
 
   async function newSession(agentId) {
-    const s = await guard(() => api.createSession(agentId ?? status?.default_agent))
-    if (!s) return
-    sessions = [s, ...sessions]
-    await openSession(s.id)
+    const created = await guard(() => api.createSession(agentId ?? status?.default_agent))
+    if (!created) return
+    sessions = [created, ...sessions]
+    await openSession(created.id)
   }
 
   async function removeSession(id) {
@@ -55,86 +62,55 @@
     if (currentId === id) {
       currentId = null
       session = null
-      messages = []
+      tx.reset()
     }
+    pendingDelete = null
   }
 
   async function changeAgent(agentId) {
     if (!currentId) return
-    const s = await guard(() => api.patchSession(currentId, { agent_id: agentId }))
-    if (s) {
-      session = s
-      sessions = sessions.map((x) => (x.id === s.id ? s : x))
-    }
+    const updated = await guard(() => api.patchSession(currentId, { agent_id: agentId }))
+    if (!updated) return
+    session = updated
+    sessions = sessions.map((s) => (s.id === updated.id ? updated : s))
   }
 
   async function send(text) {
     if (!currentId || busy) return
     busy = true
     notice = null
-    live = [{ kind: 'user', text }]
+    tx.pushUser(text)
     controller = new AbortController()
 
     try {
       for await (const ev of api.send(currentId, text, controller.signal)) {
-        apply(ev)
+        if (ev.type === 'error' && !ev.message_id) notice = { text: ev.error }
+        tx.apply(ev)
       }
     } catch (e) {
       if (e.name !== 'AbortError') notice = { kind: e.kind, text: e.message }
     } finally {
       busy = false
-      approval = null
       controller = null
-      // 確定した履歴で置き換える。途中経過の組み立てを信用しない。
-      messages = (await guard(() => api.listMessages(currentId))) ?? messages
-      live = []
-      sessions = (await guard(api.listSessions)) ?? sessions
-      session = sessions.find((s) => s.id === currentId) ?? session
-    }
-  }
-
-  function apply(ev) {
-    switch (ev.type) {
-      case 'message_start':
-        live = [...live, { kind: 'assistant', id: ev.message_id, agent: ev.agent_id, depth: ev.depth, text: '' }]
-        break
-      case 'delta': {
-        const i = live.findLastIndex((m) => m.id === ev.message_id)
-        if (i >= 0) live[i].text += ev.text
-        break
+      // 生成中のまま取り残された項目を閉じる。ここで全件を取り直さない。
+      tx.settle()
+      // 一覧の表題と並びだけ更新する。
+      const list = await guard(api.listSessions)
+      if (list) {
+        sessions = list
+        session = list.find((s) => s.id === currentId) ?? session
       }
-      case 'tool_call':
-        live = [...live, { kind: 'tool_call', depth: ev.depth, tool: ev.tool, args: ev.args }]
-        break
-      case 'tool_result':
-        live = [...live, { kind: 'tool_result', depth: ev.depth, tool: ev.tool, text: ev.result }]
-        break
-      case 'approval_request':
-        approval = ev.approval
-        break
-      case 'delegate_start':
-        live = [...live, { kind: 'delegate_start', depth: ev.depth, agent: ev.agent_id, text: ev.text }]
-        break
-      case 'delegate_end':
-        live = [...live, { kind: 'delegate_end', depth: ev.depth, agent: ev.agent_id, text: ev.result }]
-        break
-      case 'error':
-        notice = { text: ev.error }
-        break
     }
-  }
-
-  async function respond(ok) {
-    if (!approval) return
-    const id = approval.id
-    approval = null
-    await guard(() => api.respondApproval(id, ok))
   }
 
   async function cancel() {
-    if (!currentId) return
+    if (!currentId || !busy) return
     await guard(() => api.cancelRun(currentId))
     controller?.abort()
+  }
+
+  async function approve(approvalId, ok) {
+    await guard(() => api.respondApproval(approvalId, ok))
   }
 
   async function reload() {
@@ -142,76 +118,127 @@
     agents = (await guard(api.listAgents)) ?? []
   }
 
-  $effect(() => {
-    refreshMeta()
-  })
+  function onKeydown(e) {
+    if (e.key === 'Escape') {
+      if (settingsOpen) {
+        settingsOpen = false
+      } else if (pendingDelete) {
+        pendingDelete = null
+      } else if (busy) {
+        cancel()
+      }
+    }
+  }
+
+  onMount(refreshMeta)
 </script>
 
-<div class="layout">
+<svelte:window onkeydown={onKeydown} />
+
+<div class="app" class:narrow={railHidden}>
   <Sidebar
     {sessions}
     {agents}
     {status}
     {currentId}
+    {busy}
     onOpen={openSession}
     onNew={newSession}
-    onDelete={removeSession}
+    onDelete={(s) => (pendingDelete = s)}
     onReload={reload}
-    onSettings={() => (showSettings = true)}
+    onSettings={() => (settingsOpen = true)}
   />
 
   <main>
-    {#if showSettings}
-      <Settings agents={agents} onClose={() => { showSettings = false; refreshMeta() }} />
-    {:else if currentId}
-      <Chat
+    {#if currentId}
+      <ChatView
+        {railHidden}
+        onToggleRail={() => (railHidden = !railHidden)}
         {session}
         {agents}
-        {messages}
-        {live}
+        {items}
         {busy}
-        {approval}
         {notice}
+        {status}
         onSend={send}
         onCancel={cancel}
-        onApprove={respond}
+        onApprove={approve}
         onAgentChange={changeAgent}
         onDismiss={() => (notice = null)}
       />
     {:else}
-      <div class="empty">
-        <h1>Ivis</h1>
-        <p>左のパネルから会話を始めてください。</p>
+      <div class="blank">
+        <p class="title">Ivis</p>
+        <p>左の一覧から会話を選ぶか、新しい会話を始めてください。</p>
         {#if status && !status.provider_ok}
-          <p class="warn">Ollama に接続できません: {status.provider_error}</p>
+          <p class="warn">
+            Ollama に接続できていません。<br />
+            起動してから設定画面で接続先を確かめてください。
+          </p>
         {/if}
       </div>
     {/if}
   </main>
+
+  {#if settingsOpen}
+    <SettingsPanel
+      {agents}
+      onClose={() => {
+        settingsOpen = false
+        refreshMeta()
+      }}
+    />
+  {/if}
+
+  {#if pendingDelete}
+    <Confirm
+      title="この会話を削除しますか"
+      body={pendingDelete.title}
+      note="削除すると元に戻せません。エージェントの定義とスキルには影響しません。"
+      confirmLabel="削除する"
+      onConfirm={() => removeSession(pendingDelete.id)}
+      onCancel={() => (pendingDelete = null)}
+    />
+  {/if}
 </div>
 
 <style>
-  .layout {
+  /* 行の高さを画面に固定する。auto のままだと内容の分だけ伸び、
+     中の領域がスクロールせずに入力欄が画面の外へ出る。 */
+  .app {
     display: grid;
-    grid-template-columns: 260px 1fr;
+    grid-template-columns: 240px minmax(0, 1fr);
+    transition: grid-template-columns var(--dur) var(--ease);
+    grid-template-rows: minmax(0, 1fr);
     height: 100%;
+    overflow: hidden;
+  }
+  .app.narrow {
+    grid-template-columns: 0 minmax(0, 1fr);
   }
   main {
-    min-width: 0;
     display: flex;
     flex-direction: column;
+    min-width: 0;
+    min-height: 0;
     height: 100%;
   }
-  .empty {
+  .blank {
     margin: auto;
     text-align: center;
-    color: var(--fg-dim);
+    color: var(--fg-muted);
+    max-width: 30rem;
+    line-height: 1.9;
   }
-  .empty h1 {
+  .title {
     color: var(--fg);
-    letter-spacing: 0.08em;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    margin-bottom: 0.4rem;
   }
   .warn {
-    color: var(--danger);
+    margin-top: 1.5rem;
+    color: var(--danger-text);
   }
 </style>

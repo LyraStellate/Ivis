@@ -1,58 +1,151 @@
+/* 面と文字の色は、用途を固定した 12 段の並びとして持つ。
+   段の役割を固定しておくと、hover と選択とフォーカスが別々の段を使うことに
+   なり、同じ手段を奪い合わなくなる。 */
 :root {
-  --bg: #14161a;
-  --panel: #1a1d23;
-  --panel-2: #22262e;
-  --line: #2c313a;
-  --fg: #e6e8ec;
-  --fg-dim: #9aa3b2;
-  --accent: #6ea8fe;
-  --danger: #f4796b;
-  --ok: #7bd88f;
+  /* 中間色 */
+  --n1: #0c0d10;  /* 画面の地 */
+  --n2: #131519;  /* 一段沈んだ面 */
+  --n3: #1a1d23;  /* 操作できる要素の通常 */
+  --n4: #21252d;  /* hover */
+  --n5: #292e38;  /* 押下中・選択 */
+  --n6: #333945;  /* 区切り線 */
+  --n7: #3f4653;  /* 操作できる要素の境界 */
+  --n8: #525b6b;  /* hover の境界 */
+  --n9: #6b7484;  /* 塗り */
+  --n10: #7b8595; /* 塗りの hover */
+  --n11: #9099a8; /* 補助の文字 */
+  --n12: #e4e7ec; /* 本文の文字 */
+
+  /* アクセント */
+  --a3: #10243c;
+  --a4: #12304f;
+  --a5: #163b61;
+  --a6: #1d4b78;
+  --a7: #265f95;
+  --a8: #3277ba;
+  --a9: #3b82e0;
+  --a10: #4a8fea;
+  --a11: #8dbdff;
+
+  /* 失敗 */
+  --e3: #2a1618;
+  --e6: #5b2b2f;
+  --e9: #d94a52;
+  --e11: #ff9ba0;
+
+  /* 成功 */
+  --s9: #3f9d5a;
+  --s11: #7fd39a;
+
+  /* 用途名。面と、その上に乗る文字を対で持つ。面を差し替えたときに
+     文字色の指定漏れが起きないようにするため。 */
+  --bg: var(--n1);
+  --surface: var(--n2);
+  --control: var(--n3);
+  --control-hover: var(--n4);
+  --control-active: var(--n5);
+  --border: var(--n6);
+  --border-strong: var(--n7);
+  --border-hover: var(--n8);
+  --ring: var(--a9);
+  --fg: var(--n12);
+  --fg-muted: var(--n11);
+  --accent: var(--a9);
+  --accent-hover: var(--a10);
+  --accent-fg: #ffffff;
+  --accent-text: var(--a11);
+  --danger: var(--e9);
+  --danger-text: var(--e11);
+  --danger-surface: var(--e3);
+  --ok: var(--s9);
+
+  --radius: 5px;
+  --radius-sm: 3px;
+  --dur: 150ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+
+  --font: "Segoe UI", system-ui, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  --mono: "Cascadia Mono", ui-monospace, Consolas, "Liberation Mono", monospace;
+
   color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
 
-html, body, #app {
-  height: 100%;
-  margin: 0;
-}
+html, body, #app { height: 100%; margin: 0; }
 
 body {
   background: var(--bg);
   color: var(--fg);
-  font: 14px/1.7 system-ui, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+  font: 13px/1.45 var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 遷移させるのは色だけに限る。位置や大きさは動かさない。
+   動く要素が多いほど、どこを見ればよいか分からなくなる。 */
+button, select, input, textarea, .row {
+  transition:
+    background-color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease),
+    color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition-duration: 0ms !important; }
+}
+
+/* キーボードで到達したときだけリングを出す。マウスで押したときは出さない。
+   リングは hover とも選択とも別の手段なので、3 つが同時でも読み取れる。 */
+:focus { outline: none; }
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
 }
 
 button {
   font: inherit;
-  color: inherit;
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 0.35rem 0.7rem;
+  color: var(--fg);
+  background: var(--control);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 3px 9px;
   cursor: pointer;
 }
-button:hover:not(:disabled) { border-color: var(--accent); }
-button:disabled { opacity: 0.45; cursor: default; }
+button:hover:not(:disabled) { background: var(--control-hover); border-color: var(--border-hover); }
+button:active:not(:disabled) { background: var(--control-active); }
+button:disabled { color: var(--fg-muted); border-color: var(--border); cursor: default; }
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+button.primary:disabled { background: var(--control); border-color: var(--border); color: var(--fg-muted); }
+
+button.quiet {
+  background: transparent;
+  border-color: transparent;
+  color: var(--fg-muted);
+}
+button.quiet:hover:not(:disabled) { background: var(--control-hover); color: var(--fg); border-color: transparent; }
 
 input, select, textarea {
   font: inherit;
-  color: inherit;
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 0.4rem 0.55rem;
+  color: var(--fg);
+  background: var(--n2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 4px 7px;
   width: 100%;
 }
+input:hover, select:hover, textarea:hover { border-color: var(--border-hover); }
 
-pre {
-  background: #0f1115;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 0.6rem 0.8rem;
-  overflow-x: auto;
-  margin: 0.4rem 0 0;
-}
+code, pre, .mono { font-family: var(--mono); font-size: 12px; }
 
-code { font-family: "Cascadia Mono", Consolas, monospace; font-size: 0.92em; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--n5); border-radius: 6px; border: 2px solid var(--bg); }
+::-webkit-scrollbar-thumb:hover { background: var(--n6); }
+::-webkit-scrollbar-track { background: transparent; }

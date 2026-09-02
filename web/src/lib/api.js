@@ -27,6 +27,7 @@ export const putConfig = (c) => fetch('/api/config', json('PUT', c)).then(unwrap
 export const listModels = () => fetch('/api/models').then(unwrap)
 
 export const listSessions = () => fetch('/api/sessions').then(unwrap)
+export const getSession = (id) => fetch(`/api/sessions/${id}`).then(unwrap)
 export const createSession = (agent_id) => fetch('/api/sessions', json('POST', { agent_id })).then(unwrap)
 export const patchSession = (id, patch) => fetch(`/api/sessions/${id}`, json('PATCH', patch)).then(unwrap)
 export const deleteSession = (id) => fetch(`/api/sessions/${id}`, { method: 'DELETE' }).then(unwrap)

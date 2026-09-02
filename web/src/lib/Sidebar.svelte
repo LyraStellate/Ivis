@@ -1,55 +1,69 @@
 <script>
-  let { sessions, agents, status, currentId, onOpen, onNew, onDelete, onReload, onSettings } = $props()
+  let { sessions, agents, status, currentId, busy, onOpen, onNew, onDelete, onReload, onSettings } =
+    $props()
 
-  let newAgent = $state('')
+  let listEl = $state(null)
 
-  $effect(() => {
-    if (!newAgent && status?.default_agent) newAgent = status.default_agent
-  })
+  const agentName = (id) => agents.find((a) => a.id === id)?.name ?? id
 
   const problems = $derived(
     (status?.agent_errors?.length ?? 0) +
       (status?.skill_errors?.length ?? 0) +
       (status?.skill_conflicts?.length ?? 0),
   )
+
+  // 上下キーで行を移動する。Enter と Space は button の既定の動作に任せる。
+  function onListKeydown(e) {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+    const rows = [...listEl.querySelectorAll('button.open')]
+    const at = rows.indexOf(document.activeElement)
+    const next = e.key === 'ArrowDown' ? at + 1 : at - 1
+    if (next < 0 || next >= rows.length) return
+    rows[next].focus()
+    e.preventDefault()
+  }
 </script>
 
 <aside>
   <header>
-    <span class="brand">Ivis</span>
-    <span class="dot" class:ok={status?.provider_ok} title={status?.provider_ok ? 'Ollama に接続できています' : status?.provider_error ?? '接続状態は不明です'}></span>
+    <span class="brand">IVIS</span>
+    <span class="state" class:ok={status?.provider_ok}>
+      <span class="dot"></span>
+      {status?.provider_ok ? 'ollama' : '未接続'}
+    </span>
   </header>
 
-  <div class="new">
-    <select bind:value={newAgent} aria-label="エージェント">
-      {#each agents as a (a.id)}
-        <option value={a.id}>{a.name}</option>
-      {/each}
-    </select>
-    <button onclick={() => onNew(newAgent)} disabled={agents.length === 0}>新しい会話</button>
-  </div>
-
-  <nav>
+  <div class="list" bind:this={listEl}>
     {#each sessions as s (s.id)}
-      <div class="row" class:active={s.id === currentId}>
-        <button class="open" onclick={() => onOpen(s.id)}>
-          <span class="title">{s.title}</span>
-          <span class="agent">{s.agent_id}</span>
+      <div class="row" class:current={s.id === currentId}>
+        <button
+          class="open"
+          onclick={() => onOpen(s.id)}
+          onkeydown={onListKeydown}
+          disabled={busy && s.id !== currentId}
+        >
+          <span class="name">{s.title}</span>
+          <span class="agent">{agentName(s.agent_id)}</span>
         </button>
-        <button class="del" title="削除" onclick={() => onDelete(s.id)}>×</button>
+        <button class="del quiet" title="この会話を削除" onclick={() => onDelete(s)}>×</button>
       </div>
     {:else}
       <p class="hint">まだ会話がありません。</p>
     {/each}
-  </nav>
+  </div>
 
   <footer>
     {#if problems > 0}
-      <p class="warn">{problems} 件の読み込み問題があります(設定で確認)</p>
+      <button class="issues quiet" onclick={onSettings}>
+        読み込みの問題 {problems} 件
+      </button>
     {/if}
+    <button class="new" onclick={() => onNew()} disabled={agents.length === 0}>
+      新しい会話
+    </button>
     <div class="acts">
-      <button onclick={onReload}>再読込</button>
-      <button onclick={onSettings}>設定</button>
+      <button class="quiet" onclick={onReload}>再読込</button>
+      <button class="quiet" onclick={onSettings}>設定</button>
     </div>
   </footer>
 </aside>
@@ -58,87 +72,137 @@
   aside {
     display: flex;
     flex-direction: column;
-    background: var(--panel);
-    border-right: 1px solid var(--line);
     min-height: 0;
+    overflow: hidden;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
   }
+
   header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0.9rem 1rem 0.6rem;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
   }
   .brand {
-    font-weight: 600;
-    letter-spacing: 0.14em;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.22em;
+    color: var(--fg);
+  }
+  .state {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: var(--fg-muted);
   }
   .dot {
-    width: 8px;
-    height: 8px;
+    width: 6px;
+    height: 6px;
     border-radius: 50%;
     background: var(--danger);
   }
-  .dot.ok { background: var(--ok); }
-
-  .new {
-    display: grid;
-    gap: 0.4rem;
-    padding: 0 0.75rem 0.75rem;
-    border-bottom: 1px solid var(--line);
+  .state.ok .dot {
+    background: var(--ok);
   }
 
-  nav {
+  .list {
     flex: 1;
-    overflow-y: auto;
-    padding: 0.5rem;
     min-height: 0;
+    overflow-y: auto;
+    padding: 6px;
   }
+
+  /* 通常・hover・選択を別々の段で表す。選択は面の色だけでなく左の帯でも示す。 */
   .row {
     display: flex;
     align-items: stretch;
-    gap: 2px;
-    margin-bottom: 2px;
+    border-radius: var(--radius);
+    border-left: 2px solid transparent;
+    transition: background-color var(--dur) var(--ease), border-color var(--dur) var(--ease);
   }
-  .row.active .open { background: var(--panel-2); border-color: var(--accent); }
+  .row:hover {
+    background: var(--control-hover);
+  }
+  .row.current {
+    background: var(--control-active);
+    border-left-color: var(--accent);
+  }
+
   .open {
     flex: 1;
     min-width: 0;
+    display: grid;
+    gap: 1px;
     text-align: left;
     background: transparent;
     border-color: transparent;
-    display: grid;
+    padding: 5px 8px;
   }
-  .title {
+  .open:hover:not(:disabled) {
+    background: transparent;
+    border-color: transparent;
+  }
+  .name {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .agent {
-    font-size: 0.78em;
-    color: var(--fg-dim);
+    font-size: 11px;
+    color: var(--fg-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  .del {
-    background: transparent;
-    border-color: transparent;
-    color: var(--fg-dim);
-    padding: 0 0.5rem;
-  }
-  .del:hover { color: var(--danger); }
 
-  .hint, .warn {
-    color: var(--fg-dim);
-    font-size: 0.85em;
-    padding: 0 0.5rem;
+  .del {
+    align-self: center;
+    padding: 0 7px;
+    font-size: 14px;
+    line-height: 1;
+    opacity: 0;
   }
-  .warn { color: var(--danger); }
+  .row:hover .del,
+  .del:focus-visible {
+    opacity: 1;
+  }
+  .del:hover {
+    color: var(--danger-text);
+    background: var(--danger-surface);
+  }
+
+  .hint {
+    color: var(--fg-muted);
+    font-size: 12px;
+    padding: 6px 8px;
+  }
 
   footer {
-    border-top: 1px solid var(--line);
-    padding: 0.6rem 0.75rem;
+    border-top: 1px solid var(--border);
+    padding: 8px;
+    display: grid;
+    gap: 6px;
+  }
+  .new {
+    width: 100%;
   }
   .acts {
     display: flex;
-    gap: 0.4rem;
+    gap: 6px;
   }
-  .acts button { flex: 1; }
+  .acts button {
+    flex: 1;
+  }
+  .issues {
+    color: var(--danger-text);
+    font-size: 11px;
+    text-align: left;
+  }
+  .issues:hover {
+    background: var(--danger-surface);
+    color: var(--danger-text);
+  }
 </style>

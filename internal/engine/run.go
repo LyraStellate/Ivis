@@ -83,7 +83,7 @@ func (e *Engine) loop(ctx context.Context, rc *runCtx) (string, error) {
 			Options:  rc.agent.Options,
 		}
 
-		text, calls, err := e.generate(ctx, rc, req)
+		msgID, text, calls, err := e.generate(ctx, rc, req)
 		if err != nil {
 			return last, err
 		}
@@ -94,7 +94,7 @@ func (e *Engine) loop(ctx context.Context, rc *runCtx) (string, error) {
 		if len(calls) == 0 {
 			return last, nil
 		}
-		if err := e.runToolCalls(ctx, rc, calls); err != nil {
+		if err := e.runToolCalls(ctx, rc, msgID, calls); err != nil {
 			return last, err
 		}
 	}
@@ -106,12 +106,13 @@ func (e *Engine) loop(ctx context.Context, rc *runCtx) (string, error) {
 	return last, errors.New(msg)
 }
 
-// generate は 1 回の生成を行い、本文とツール呼び出しを返す。
-func (e *Engine) generate(ctx context.Context, rc *runCtx, req provider.Request) (string, []provider.ToolCall, error) {
+// generate は 1 回の生成を行い、保存した発言の識別子・本文・ツール呼び出しを返す。
+// 識別子はツール呼び出しに一意な名前を与えるために使う。
+func (e *Engine) generate(ctx context.Context, rc *runCtx, req provider.Request) (string, string, []provider.ToolCall, error) {
 	stream, err := e.Provider.Chat(ctx, req)
 	if err != nil {
 		rc.emit(Event{Type: EvtError, Depth: rc.depth, AgentID: rc.agent.ID, Error: err.Error()})
-		return "", nil, err
+		return "", "", nil, err
 	}
 
 	msg := &store.Message{
@@ -122,7 +123,7 @@ func (e *Engine) generate(ctx context.Context, rc *runCtx, req provider.Request)
 		Model:     rc.agent.Model,
 	}
 	if err := e.Store.AppendMessage(ctx, msg); err != nil {
-		return "", nil, fmt.Errorf("応答を保存できませんでした: %w", err)
+		return "", "", nil, fmt.Errorf("応答を保存できませんでした: %w", err)
 	}
 	rc.emit(Event{Type: EvtMessageStart, MessageID: msg.ID, AgentID: rc.agent.ID,
 		ParentID: rc.parentID, Depth: rc.depth})
@@ -175,11 +176,11 @@ loop:
 		persist(genErr.Error())
 		rc.emit(Event{Type: EvtError, MessageID: msg.ID, Depth: rc.depth,
 			AgentID: rc.agent.ID, Error: genErr.Error()})
-		return sb.String(), nil, genErr
+		return msg.ID, sb.String(), nil, genErr
 	}
 	persist("")
 	rc.emit(Event{Type: EvtMessageEnd, MessageID: msg.ID, Depth: rc.depth})
-	return sb.String(), calls, nil
+	return msg.ID, sb.String(), calls, nil
 }
 
 func (e *Engine) maybeSetTitle(ctx context.Context, sess *store.Session, userText string) {
