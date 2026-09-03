@@ -234,6 +234,16 @@ describe('送信した発言の識別子', () => {
     expect(tx.items[0].id).toBe(local)
   })
 
+  it('要素そのものを持ち越さない', () => {
+    // items は画面の状態配列である。配列へ入れる前の参照を持ったまま書き換え
+    // ると、値は変わるのに再描画が起きず、巻き戻しの操作が会話を開き直すまで
+    // 出てこない。実際にこれで取りこぼしていたので、識別子だけを持つ形を
+    // ここで固定する。
+    const tx = new Transcript([])
+    tx.pushUser('頼む')
+    expect(typeof tx.lastSent).toBe('string')
+  })
+
   it('差し替えは 1 度きり', () => {
     const tx = new Transcript([])
     tx.pushUser('1 回目')

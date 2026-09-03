@@ -32,6 +32,22 @@
 
   const open = $derived(item.status === 'error' || item.status === 'awaiting')
 
+  // 推論は、考えている間だけ開く。何も出ないまま待たされるより、いま何を
+  // たどっているかが見えるほうが、待つ理由が分かる。本文が出はじめたら
+  // 役目が終わるので畳む。結論が過程に押し下げられないようにするため。
+  let openThink = $state(null)
+  const thinkLive = $derived(item.status === 'streaming' && !item.text)
+  // 利用者が自分で開閉したら、その意思を以後優先する。
+  const showThink = $derived(openThink ?? thinkLive)
+
+  // 考えている間は末尾を見せ続ける。上端で止まっていると、伸びているのに
+  // 何も動いていないように見える。
+  let thinkBox = $state(null)
+  $effect(() => {
+    item.thinking
+    if (thinkLive && thinkBox) thinkBox.scrollTop = thinkBox.scrollHeight
+  })
+
   // 委譲の中は、渡した先を話し手として同じ規則で組み直す。
   const kids = $derived(item.children ?? [])
   const kidLeads = $derived(leads(kids))
@@ -70,13 +86,15 @@
 
     {:else if item.kind === 'agent'}
       <div class="body">
-        <!-- 推論は畳んでおく。過程は求められたときだけ読むもので、既定で
-             開くと結論が下へ押し出される。 -->
         {#if item.thinking}
-          <details class="think">
-            <summary>推論</summary>
-            <pre class="mono">{item.thinking}</pre>
-          </details>
+          <div class="think" class:on={showThink}>
+            <button class="peek" onclick={() => (openThink = !showThink)} aria-expanded={showThink}>
+              {thinkLive ? '考えています' : '推論'}
+            </button>
+            {#if showThink}
+              <pre class="mono" bind:this={thinkBox}>{item.thinking}</pre>
+            {/if}
+          </div>
         {/if}
         <Markdown text={item.text} />
         {#if item.error}<p class="failed">{item.error}</p>{/if}
@@ -182,20 +200,25 @@
     margin: 0 0 6px;
     color: var(--fg-muted);
   }
-  .think summary {
-    cursor: pointer;
+  .peek {
+    padding: 0;
+    background: none;
+    border: none;
     font-size: 11px;
-    list-style: none;
+    color: var(--fg-dim);
   }
-  .think summary::-webkit-details-marker { display: none; }
-  .think summary::before {
+  .peek:hover { color: var(--fg-muted); background: none; }
+  .peek::before {
     content: "▸  ";
     color: var(--g9);
   }
-  .think[open] summary::before { content: "▾  "; }
+  .think.on .peek::before { content: "▾  "; }
   .think pre {
     margin: 4px 0 0;
     padding: 8px 10px;
+    /* 長い推論で本文が画面外へ押し出されないよう、高さを切って中で送る。 */
+    max-height: 12rem;
+    overflow-y: auto;
     background: var(--sunken);
     border-radius: var(--radius);
     white-space: pre-wrap;

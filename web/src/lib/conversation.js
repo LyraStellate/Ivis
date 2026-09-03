@@ -127,7 +127,9 @@ export class Transcript {
     this.items = items
     // 委譲の深さごとの容れ物。containers[0] が最上位。
     this.containers = [items]
-    // 送信直後の発言。保存された識別子が届いたら差し替える。
+    // 送信直後の発言が持つ局所の識別子。保存された識別子が届いたら差し替える。
+    // 要素そのものを持ち越さないのは、items が状態配列だからである。配列へ
+    // 入れる前の参照を書き換えても、画面はそれを知らない。
     this.lastSent = null
   }
 
@@ -152,15 +154,15 @@ export class Transcript {
   /** 送信した本文を先に置く。応答を待つ間、何を送ったかが見えるようにする。 */
   pushUser(text) {
     this.containers = [this.items]
-    const item = {
-      id: localId('sent'),
+    const id = localId('sent')
+    this.items.push({
+      id,
       kind: 'user',
       status: 'done',
       text,
       time: new Date().toISOString(),
-    }
-    this.items.push(item)
-    this.lastSent = item
+    })
+    this.lastSent = id
   }
 
   /**
@@ -193,10 +195,13 @@ export class Transcript {
     switch (ev.type) {
       // 送った本文は画面が先に置いている。保存された識別子を受け取って
       // 差し替え、その発言を指す操作 (巻き戻し) をすぐ使えるようにする。
-      case 'user_saved':
-        if (this.lastSent && ev.message_id) this.lastSent.id = ev.message_id
+      case 'user_saved': {
+        // 配列から引き直してから書き換える。他の分岐と同じ経路を通す。
+        const it = findById(this.items, this.lastSent)
+        if (it && ev.message_id) it.id = ev.message_id
         this.lastSent = null
         break
+      }
 
       case 'message_start':
         box.push({
