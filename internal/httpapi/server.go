@@ -4,6 +4,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"net/http"
 	"sync"
@@ -90,6 +91,10 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("GET /api/agents", s.handleAgents)
+	mux.HandleFunc("POST /api/agents", s.handleCreateAgent)
+	mux.HandleFunc("PUT /api/agents/{id}", s.handleUpdateAgent)
+	mux.HandleFunc("DELETE /api/agents/{id}", s.handleDeleteAgent)
+	mux.HandleFunc("GET /api/tools", s.handleTools)
 	mux.HandleFunc("GET /api/skills", s.handleSkills)
 	mux.HandleFunc("POST /api/reload", s.handleReload)
 	mux.HandleFunc("GET /api/models", s.handleModels)
@@ -121,17 +126,37 @@ type errorBody struct {
 	Error string `json:"error"`
 	// Kind は利用者が次に何をすべきかを UI が出し分けるための区別。
 	Kind string `json:"kind,omitempty"`
+	// Field は入力の問題のとき、どの欄を直せばよいか。
+	Field string `json:"field,omitempty"`
 }
 
 // writeError は失敗を種類とともに返す。まとめて「エラーが発生しました」に
 // すると、Ollama の起動忘れなのか設定の誤りなのかを利用者が判断できない。
 func writeError(w http.ResponseWriter, status int, err error) {
-	writeJSON(w, status, errorBody{Error: err.Error(), Kind: kindOf(err)})
+	body := errorBody{Error: err.Error(), Kind: kindOf(err)}
+	var fe *agent.FieldError
+	if errors.As(err, &fe) {
+		body.Kind, body.Field = "invalid_input", fe.Field
+	}
+	writeJSON(w, status, body)
 }
 
 // 種類の判定は engine が持つ。ストリーム上の失敗と HTTP の失敗で分類が
 // 食い違うと、同じ原因が画面上で別物として見える。
 func kindOf(err error) string { return engine.KindOf(err) }
+
+// statusFor は失敗を HTTP の状態へ写す。入力の誤りと、存在しないもの、
+// それ以外を分けないと、画面は直せる誤りと直せない障害を区別できない。
+func statusFor(err error) int {
+	var fe *agent.FieldError
+	switch {
+	case errors.As(err, &fe):
+		return http.StatusBadRequest
+	case errors.Is(err, store.ErrNotFound):
+		return http.StatusNotFound
+	}
+	return http.StatusInternalServerError
+}
 
 func decodeJSON(r *http.Request, v any) error {
 	defer r.Body.Close()

@@ -176,3 +176,41 @@ it('同じ瞬間に届いた通知が同じ識別子にならない', () => {
   expect(items).toHaveLength(2)
   expect(items[0].id).not.toBe(items[1].id)
 })
+
+describe('推論', () => {
+  it('本文とは別に溜める', () => {
+    const tx = new Transcript([])
+    tx.apply({ type: 'message_start', message_id: 'm1', agent_id: 'main' })
+    tx.apply({ type: 'thinking', message_id: 'm1', text: '考え中' })
+    tx.apply({ type: 'delta', message_id: 'm1', text: '答え' })
+    tx.apply({ type: 'message_end', message_id: 'm1' })
+
+    expect(tx.items).toHaveLength(1)
+    expect(tx.items[0].thinking).toBe('考え中')
+    expect(tx.items[0].text).toBe('答え')
+  })
+
+  it('推論だけの発言も残す', () => {
+    // 推論して、本文を出さずにツールを呼んだ回。過程まで消すと何も見えない。
+    const tx = new Transcript([])
+    tx.apply({ type: 'message_start', message_id: 'm1', agent_id: 'main' })
+    tx.apply({ type: 'thinking', message_id: 'm1', text: '調べよう' })
+    tx.apply({ type: 'message_end', message_id: 'm1' })
+    expect(tx.items).toHaveLength(1)
+  })
+
+  it('本文も推論も無い発言は残さない', () => {
+    const tx = new Transcript([])
+    tx.apply({ type: 'message_start', message_id: 'm1', agent_id: 'main' })
+    tx.apply({ type: 'message_end', message_id: 'm1' })
+    expect(tx.items).toHaveLength(0)
+  })
+
+  it('確定履歴からも読み取る', () => {
+    const tx = new Transcript([])
+    tx.loadHistory([
+      { id: 'a', role: 'assistant', content: '答え', thinking: '過程', agent_id: 'main' },
+    ])
+    expect(tx.items[0].thinking).toBe('過程')
+  })
+})

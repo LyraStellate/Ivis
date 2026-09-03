@@ -6,15 +6,15 @@
   import { leads, owners } from './group.js'
   import { whoColor, USER_COLOR, USER_NAME } from './who.js'
 
-  let { item, onApprove, lead = true, owner = null, nested = false } = $props()
+  let { item, onApprove, colorOf = null, lead = true, owner = null, nested = false } = $props()
 
   // 誰のターンの中にいるか。ターン全体を括る細い縦線の色になる。
-  const ownColor = $derived(owner?.isUser ? 'var(--g7)' : whoColor(owner?.agentId))
+  const ownColor = $derived(owner?.isUser ? 'var(--g7)' : whoColor(owner?.agentId, colorOf))
   const isUserTurn = $derived(owner?.isUser === true)
 
   // 名前は話し手が変わったときだけ出す。
   const name = $derived(item.kind === 'user' ? USER_NAME : (item.agentId ?? ''))
-  const nameColor = $derived(item.kind === 'user' ? USER_COLOR : whoColor(item.agentId))
+  const nameColor = $derived(item.kind === 'user' ? USER_COLOR : whoColor(item.agentId, colorOf))
 
   const open = $derived(item.status === 'error' || item.status === 'awaiting')
 
@@ -51,6 +51,14 @@
 
     {:else if item.kind === 'agent'}
       <div class="body">
+        <!-- 推論は畳んでおく。過程は求められたときだけ読むもので、既定で
+             開くと結論が下へ押し出される。 -->
+        {#if item.thinking}
+          <details class="think">
+            <summary>推論</summary>
+            <pre class="mono">{item.thinking}</pre>
+          </details>
+        {/if}
         <Markdown text={item.text} />
         {#if item.error}<p class="failed">{item.error}</p>{/if}
       </div>
@@ -92,11 +100,11 @@
       <!-- 委譲は、渡した先の色の縦線で子の会話を囲み、成果で左へ折り返す。
            既定で開く。渡した先の仕事は経過ではなく中身なので、畳むと
            何が起きたのかが読めなくなる。 -->
-      <div class="dg" style:--spine={whoColor(item.agentId)}>
+      <div class="dg" style:--spine={whoColor(item.agentId, colorOf)}>
         <details open>
           <summary class="head">
             <span class="dot {item.status}"></span>
-            <span class="tname" style:color={whoColor(item.agentId)}>{item.agentId}</span>
+            <span class="tname" style:color={whoColor(item.agentId, colorOf)}>{item.agentId}</span>
             <span class="to">へ委譲</span>
             <span class="args">{item.task ?? ''}</span>
             {#if item.ms}<span class="ms mono tnum">{duration(item.ms)}</span>{/if}
@@ -104,7 +112,14 @@
 
           <div class="children">
             {#each kids as child, i (child.id)}
-              <Self item={child} {onApprove} lead={kidLeads[i]} owner={kidOwners[i]} nested />
+              <Self
+                item={child}
+                {onApprove}
+                {colorOf}
+                lead={kidLeads[i]}
+                owner={kidOwners[i]}
+                nested
+              />
             {/each}
           </div>
 
@@ -125,6 +140,32 @@
 </div>
 
 <style>
+  /* 推論は本文の前に置くが、地に沈めて結論より前へ出ない扱いにする。 */
+  .think {
+    margin: 0 0 6px;
+    color: var(--fg-muted);
+  }
+  .think summary {
+    cursor: pointer;
+    font-size: 11px;
+    list-style: none;
+  }
+  .think summary::-webkit-details-marker { display: none; }
+  .think summary::before {
+    content: "▸  ";
+    color: var(--g9);
+  }
+  .think[open] summary::before { content: "▾  "; }
+  .think pre {
+    margin: 4px 0 0;
+    padding: 8px 10px;
+    background: var(--sunken);
+    border-radius: var(--radius);
+    white-space: pre-wrap;
+    font-size: 11px;
+    line-height: 1.7;
+  }
+
   /* まとまりの中では上下の隙間を空けない。隙間があると縦線が切れて、
      ひとまとまりに見えなくなる。話し手が変わるときだけ間を空ける。 */
   .item { padding: 1px 0; }

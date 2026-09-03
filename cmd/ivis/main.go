@@ -46,11 +46,10 @@ func run() error {
 	if err := cfg.EnsureDirs(); err != nil {
 		return err
 	}
-	// 定義が 1 つも無いと何も起動できないため、初回だけ雛形を置く。
-	if len(cfg.AgentPaths) > 0 {
-		if err := agent.WriteStarter(cfg.AgentPaths[0]); err != nil {
-			log.Printf("エージェントの雛形を書けませんでした: %v", err)
-		}
+	// 定義が 1 つも無いと何も起動できず、入口 (規定エージェント) が失われると
+	// どのエージェントも呼べない。足りない分だけ補う。
+	if err := agent.Bootstrap(cfg.AgentPaths); err != nil {
+		log.Printf("エージェントの雛形を書けませんでした: %v", err)
 	}
 
 	st, err := store.Open(cfg.DBPath())

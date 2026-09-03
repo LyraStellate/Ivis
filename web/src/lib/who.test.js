@@ -1,14 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { whoColor, USER_COLOR } from './who.js'
+import { whoColor, USER_COLOR, COLORS } from './who.js'
 
 describe('whoColor', () => {
   it('同じ ID からは常に同じ色が出る', () => {
     expect(whoColor('researcher')).toBe(whoColor('researcher'))
   })
 
-  it('8 つの枠のいずれかを指す', () => {
+  it('用意した色のいずれかを指す', () => {
     for (const id of ['a', 'main', 'researcher', 'writer', 'planner']) {
-      expect(whoColor(id)).toMatch(/^var\(--who-[1-8]\)$/)
+      expect(COLORS.map((c) => 'var(--who-' + c + ')')).toContain(whoColor(id))
     }
   })
 
@@ -18,10 +18,18 @@ describe('whoColor', () => {
     expect(whoColor('abc')).not.toBe(whoColor('acb'))
   })
 
-  it('十分な数の ID を与えると 8 つの枠が埋まる', () => {
+  it('十分な数の ID を与えると全ての枠が埋まる', () => {
     const seen = new Set()
     for (let i = 0; i < 200; i++) seen.add(whoColor('agent-' + i))
-    expect(seen.size).toBe(8)
+    expect(seen.size).toBe(COLORS.length)
+  })
+
+  it('定義で選ばれた色を優先する', () => {
+    expect(whoColor('anything', () => 'rose')).toBe('var(--who-rose)')
+  })
+
+  it('知らない色名は自動の割り当てに戻す', () => {
+    expect(whoColor('main', () => 'puce')).toBe(whoColor('main'))
   })
 
   it('ID が無いときは利用者と同じ扱いにして落ちない', () => {

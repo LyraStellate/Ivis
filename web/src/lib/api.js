@@ -6,6 +6,9 @@ async function unwrap(res) {
     const body = await res.json().catch(() => ({ error: res.statusText }))
     const err = new Error(body.error || '要求に失敗しました')
     err.kind = body.kind
+    // どの欄を直せばよいかを画面へ渡す。まとめて「保存できません」に
+    // すると、利用者は直せる誤りを直せない。
+    err.field = body.field
     throw err
   }
   if (res.status === 204) return null
@@ -20,6 +23,10 @@ const json = (method, body) => ({
 
 export const getStatus = () => fetch('/api/status').then(unwrap)
 export const listAgents = () => fetch('/api/agents').then(unwrap)
+export const createAgent = (a) => fetch('/api/agents', json('POST', a)).then(unwrap)
+export const updateAgent = (id, a) => fetch(`/api/agents/${id}`, json('PUT', a)).then(unwrap)
+export const deleteAgent = (id) => fetch(`/api/agents/${id}`, { method: 'DELETE' }).then(unwrap)
+export const listTools = () => fetch('/api/tools').then(unwrap)
 export const listSkills = () => fetch('/api/skills').then(unwrap)
 export const reloadDefs = () => fetch('/api/reload', json('POST')).then(unwrap)
 export const getConfig = () => fetch('/api/config').then(unwrap)

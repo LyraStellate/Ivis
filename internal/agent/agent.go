@@ -1,7 +1,9 @@
-// Package agent はエージェント定義 (JSON) の読み込みを担う。
+// Package agent はエージェント定義 (JSON) の読み書きを担う。
 //
-// 定義はファイルが正であり、Ivis 側から書き戻さない。利用者が手で編集し、
-// git で管理し、他人と共有する対象だからである。例外は初回起動時の雛形出力のみ。
+// 定義はファイルが正である。読み込みは常にファイルから行い、Ivis はファイルの
+// 内容を超えた状態を持たない。v1 と異なるのは、書き手が Ivis にもなりうる点
+// だけである (#528664)。画面から保存すると定義全体を書き直すため、手で書いた
+// コメントや項目の並び順は失われる。
 package agent
 
 import (
@@ -14,29 +16,69 @@ import (
 	"sync"
 )
 
+const (
+	// DefaultID は規定エージェントの ID。削除できず、Tier は常に 0 である。
+	DefaultID = "general"
+	// MinUserTier は利用者が作れる最小の Tier。入口を 1 つに保つため 0 は渡さない。
+	MinUserTier = 1
+)
+
+// Colors は話し手の色として選べる名前。web/src/app.css の 8 色に対応する。
+// 自由な色指定にしないのは、画面の配色と調和しない色を選べてしまうため。
+var Colors = []string{"blue", "green", "amber", "violet", "teal", "rose", "orange", "indigo"}
+
 // Agent は 1 つのエージェント定義。
 type Agent struct {
 	// ID はファイル名から導出する。一覧内で一意であることを読み込み時に検証する。
 	ID string `json:"id"`
 	// Name は表示名。
 	Name string `json:"name"`
-	// Description は一覧および委譲先の選択でモデルに示す説明。
+	// Description は「どういうときにこのエージェントを呼ぶか」。上位エージェントの
+	// システムプロンプトにそのまま載り、委譲先を選ぶ判断材料になる。
 	Description string `json:"description"`
 	// Model は Ollama 上のモデル名。
 	Model string `json:"model"`
 	// Instructions はシステムプロンプトの中核となる指示文。
 	Instructions string `json:"instructions"`
+	// Tier は階層。小さいほど上位で、委譲できるのは Tier が真に大きい相手だけ。
+	// 誰が誰を呼べるかがこの 1 つの数で決まるため、エージェントを増やすときに
+	// 既存の定義へ手を入れる必要がない。
+	Tier int `json:"tier"`
 	// Tools は許可するツール名。空なら何も許可しない。"*" ですべて。
 	Tools []string `json:"tools"`
 	// Skills は利用可能とするスキル名。"*" ですべて。
 	Skills []string `json:"skills"`
-	// Delegates は委譲先として呼べる子エージェントの ID。ここに無い相手は呼べない。
-	Delegates []string `json:"delegates"`
+	// Memory は委譲されたときに、同じセッション内での前回のやり取りを
+	// 引き継ぐか。false なら毎回まっさらな文脈で始まる。
+	Memory bool `json:"memory"`
+	// Thinking はモデルの推論機能を使うか。対応しないモデルでは失敗する。
+	Thinking bool `json:"thinking"`
+	// Color は話し手の色。空なら ID から機械的に決める。
+	Color string `json:"color,omitempty"`
 	// Options は生成パラメータ (temperature, num_ctx など) をそのまま Ollama へ渡す。
 	Options map[string]any `json:"options,omitempty"`
 
 	// File は読み込み元。UI での表示と、どのファイルを直せばよいかの手がかり。
 	File string `json:"file"`
+	// Fixed は削除も Tier の変更もできないこと。規定エージェントだけが真。
+	Fixed bool `json:"fixed"`
+}
+
+// doc はファイル上の表現。ID とファイル位置は読み込み時に導出するものなので
+// 持たない。廃止した delegates は、ここに無いことで黙って無視される。手元の
+// 定義が一斉に読めなくなる事態を避けるため、エラーにはしない。
+type doc struct {
+	Name         string         `json:"name"`
+	Description  string         `json:"description"`
+	Model        string         `json:"model"`
+	Instructions string         `json:"instructions"`
+	Tier         *int           `json:"tier,omitempty"`
+	Tools        []string       `json:"tools"`
+	Skills       []string       `json:"skills"`
+	Memory       bool           `json:"memory"`
+	Thinking     bool           `json:"thinking"`
+	Color        string         `json:"color,omitempty"`
+	Options      map[string]any `json:"options,omitempty"`
 }
 
 // LoadError は 1 つの定義の読み込み失敗。
@@ -95,20 +137,45 @@ func (s *Set) Load(paths []string) {
 			order = append(order, a.ID)
 		}
 	}
-	sort.Strings(order)
+	sortIDs(order, agents)
 
 	s.mu.Lock()
 	s.agents, s.order, s.errs = agents, order, errs
 	s.mu.Unlock()
 }
 
-// List は ID 順の一覧を返す。
+// sortIDs は Tier 順、同じ Tier では ID 順に並べる。一覧も指示文へ載せる
+// 並びも上位から下位へ読めるようにする。
+func sortIDs(order []string, agents map[string]*Agent) {
+	sort.Slice(order, func(i, j int) bool {
+		a, b := agents[order[i]], agents[order[j]]
+		if a.Tier != b.Tier {
+			return a.Tier < b.Tier
+		}
+		return a.ID < b.ID
+	})
+}
+
+// List は Tier 順の一覧を返す。
 func (s *Set) List() []*Agent {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]*Agent, 0, len(s.order))
 	for _, id := range s.order {
 		out = append(out, s.agents[id])
+	}
+	return out
+}
+
+// Below は指定したエージェントが委譲できる相手を Tier 順で返す。
+func (s *Set) Below(a *Agent) []*Agent {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*Agent, 0, len(s.order))
+	for _, id := range s.order {
+		if c := s.agents[id]; c.Tier > a.Tier {
+			out = append(out, c)
+		}
 	}
 	return out
 }
@@ -139,99 +206,70 @@ func (a *Agent) Allows(tool string) bool {
 	return false
 }
 
-// CanDelegateTo は指定エージェントへの委譲が許可されているかを返す。
-func (a *Agent) CanDelegateTo(id string) bool {
-	for _, d := range a.Delegates {
-		if d == "*" || d == id {
-			return true
-		}
-	}
-	return false
-}
+// CanDelegateTo は相手へ委譲できるかを返す。Tier が真に大きい相手だけを呼べる。
+// 同位を含めないのは、含めると同 Tier どうしで循環しうるためである。
+func (a *Agent) CanDelegateTo(b *Agent) bool { return b != nil && b.Tier > a.Tier }
 
 func parse(path string) (*Agent, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	var a Agent
-	if err := json.Unmarshal(b, &a); err != nil {
+	var d doc
+	if err := json.Unmarshal(b, &d); err != nil {
 		return nil, fmt.Errorf("JSON が壊れています: %v", err)
 	}
 	// ID はファイル名から導出する。定義内の id は無視し、ファイルの位置と
 	// 識別子が常に一致する状態を保つ。
-	a.ID = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-	a.File = path
+	id := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	a := &Agent{
+		ID:           id,
+		Name:         d.Name,
+		Description:  d.Description,
+		Model:        d.Model,
+		Instructions: d.Instructions,
+		Tools:        d.Tools,
+		Skills:       d.Skills,
+		Memory:       d.Memory,
+		Thinking:     d.Thinking,
+		Color:        d.Color,
+		Options:      d.Options,
+		File:         path,
+		Fixed:        id == DefaultID,
+	}
+
+	// Tier は省略できる。書かれていなければ規定より 1 つ下として扱う。
+	a.Tier = MinUserTier
+	if d.Tier != nil && *d.Tier > MinUserTier {
+		a.Tier = *d.Tier
+	}
+	// 規定エージェントの Tier はファイルに何が書いてあっても 0 とする。
+	// 入口が 2 つある状態を、定義を手で書き換えて作れないようにするため。
+	if a.Fixed {
+		a.Tier = 0
+	}
 
 	if a.Name == "" {
 		a.Name = a.ID
 	}
+	if !validColor(a.Color) {
+		// 知らない色は指定が無いものとして扱う。読み込み自体は通す。
+		a.Color = ""
+	}
 	if strings.TrimSpace(a.Model) == "" {
 		return nil, fmt.Errorf("model が指定されていません")
 	}
-	return &a, nil
+	return a, nil
 }
 
-// WriteStarter は初回起動時に限り、エージェントの雛形を書き出す。
-// 1 つも定義が無い状態では何も起動できないため、出発点だけ用意する。
-func WriteStarter(dir string) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+func validColor(c string) bool {
+	if c == "" {
+		return true
 	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		if strings.EqualFold(filepath.Ext(e.Name()), ".json") {
-			return nil // 既に何かある。触らない。
+	for _, v := range Colors {
+		if v == c {
+			return true
 		}
 	}
-
-	// 出力用の型を別に持つ。ID とファイル位置は読み込み時に導出するものなので、
-	// 雛形ファイルには書かない。
-	type starterDoc struct {
-		Name         string         `json:"name"`
-		Description  string         `json:"description"`
-		Model        string         `json:"model"`
-		Instructions string         `json:"instructions"`
-		Tools        []string       `json:"tools"`
-		Skills       []string       `json:"skills"`
-		Delegates    []string       `json:"delegates,omitempty"`
-		Options      map[string]any `json:"options,omitempty"`
-	}
-
-	starters := map[string]starterDoc{
-		"general": {
-			Name:         "General",
-			Description:  "汎用の対話エージェント。調べ物や下書きを頼む相手。",
-			Model:        "qwen3:8b",
-			Instructions: "あなたは Ivis の汎用アシスタントです。日本語で簡潔に答えます。\n必要なときだけツールを使い、使う前に何をするかを一言添えてください。",
-			Tools:        []string{"list_dir", "read_file", "write_file", "load_skill", "run_skill_script", "delegate"},
-			Skills:       []string{"*"},
-			Delegates:    []string{"researcher"},
-			Options:      map[string]any{"temperature": 0.7},
-		},
-		"researcher": {
-			Name:         "Researcher",
-			Description:  "作業ディレクトリ内を読んで調べ、要点だけを返す。書き込みはしない。",
-			Model:        "qwen3:8b",
-			Instructions: "あなたは調査担当です。与えられた依頼について作業ディレクトリ内を調べ、\n結論と根拠だけを短くまとめて返します。ファイルは書き換えません。",
-			Tools:        []string{"list_dir", "read_file", "load_skill"},
-			Skills:       []string{"*"},
-			Options:      map[string]any{"temperature": 0.3},
-		},
-	}
-
-	for id, a := range starters {
-		b, err := json.MarshalIndent(a, "", "  ")
-		if err != nil {
-			return err
-		}
-		p := filepath.Join(dir, id+".json")
-		if err := os.WriteFile(p, append(b, '\n'), 0o644); err != nil {
-			return err
-		}
-	}
-	return nil
+	return false
 }

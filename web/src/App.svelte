@@ -28,6 +28,10 @@
   // 会話が無いときに「誰が答えるか」を出すために使う。
   const defaultAgent = $derived(agents.find((a) => a.id === status?.default_agent) ?? null)
 
+  // 発言の色は定義で選ばれていればそれを使う。定義を画面の各所へ配るのでは
+  // なく、ID から色名を引く関数を 1 つ渡す。
+  const colorOf = $derived((id) => agents.find((a) => a.id === id)?.color ?? '')
+
   async function guard(fn) {
     try {
       return await fn()
@@ -165,6 +169,7 @@
         {busy}
         {notice}
         {status}
+        {colorOf}
         onSend={send}
         onCancel={cancel}
         onApprove={approve}
@@ -201,6 +206,10 @@
   {#if settingsOpen}
     <SettingsPanel
       {agents}
+      onAgentsChanged={async () => {
+        agents = (await guard(api.listAgents)) ?? []
+        status = await guard(api.getStatus)
+      }}
       onClose={() => {
         settingsOpen = false
         refreshMeta()

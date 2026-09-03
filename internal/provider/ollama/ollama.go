@@ -37,6 +37,7 @@ type chatMessage struct {
 	Content   string         `json:"content"`
 	ToolCalls []chatToolCall `json:"tool_calls,omitempty"`
 	ToolName  string         `json:"tool_name,omitempty"`
+	Thinking  string         `json:"thinking,omitempty"`
 }
 
 type chatToolCall struct {
@@ -61,6 +62,9 @@ type chatRequest struct {
 	Tools    []chatToolDef  `json:"tools,omitempty"`
 	Stream   bool           `json:"stream"`
 	Options  map[string]any `json:"options,omitempty"`
+	// Think は省略と false を区別する。対応しないモデルへ false を送ると
+	// 断られる実装があるため、使わないときは項目ごと出さない。
+	Think *bool `json:"think,omitempty"`
 }
 
 type chatChunk struct {
@@ -72,6 +76,10 @@ type chatChunk struct {
 // Chat は生成を開始する。返されたチャネルは必ず done か error で終わる。
 func (c *Client) Chat(ctx context.Context, req provider.Request) (<-chan provider.Event, error) {
 	body := chatRequest{Model: req.Model, Stream: true, Options: req.Options}
+	if req.Think {
+		think := true
+		body.Think = &think
+	}
 	for _, m := range req.Messages {
 		cm := chatMessage{Role: m.Role, Content: m.Content, ToolName: m.ToolName}
 		for _, tc := range m.ToolCalls {
@@ -149,6 +157,11 @@ func (c *Client) stream(ctx context.Context, resp *http.Response, model string, 
 		if chunk.Error != "" {
 			send(provider.Event{Type: provider.EventError, Err: classify(model, 0, []byte(chunk.Error))})
 			return
+		}
+		if chunk.Message.Thinking != "" {
+			if !send(provider.Event{Type: provider.EventThinking, Text: chunk.Message.Thinking}) {
+				return
+			}
 		}
 		if chunk.Message.Content != "" {
 			if !send(provider.Event{Type: provider.EventDelta, Text: chunk.Message.Content}) {
@@ -252,6 +265,8 @@ func classify(model string, status int, raw []byte) error {
 	low := strings.ToLower(msg)
 
 	switch {
+	case strings.Contains(low, "does not support thinking"), strings.Contains(low, "thinking is not supported"):
+		return &provider.ThinkingUnsupportedError{Model: model}
 	case strings.Contains(low, "does not support tools"), strings.Contains(low, "tools are not supported"):
 		return &provider.ToolsUnsupportedError{Model: model}
 	case strings.Contains(low, "not found"), strings.Contains(low, "no such model"), status == http.StatusNotFound:

@@ -5,19 +5,23 @@ import (
 
 	"github.com/LyraStellate/Ivis/internal/agent"
 	"github.com/LyraStellate/Ivis/internal/config"
+	"github.com/LyraStellate/Ivis/internal/provider"
 	"github.com/LyraStellate/Ivis/internal/skillreg"
 )
 
 type statusBody struct {
-	Provider     string               `json:"provider"`
-	ProviderOK   bool                 `json:"provider_ok"`
-	ProviderErr  string               `json:"provider_error,omitempty"`
-	Workspace    string               `json:"workspace"`
-	ConfigPath   string               `json:"config_path"`
-	DefaultAgent string               `json:"default_agent"`
-	AgentErrors  []agent.LoadError    `json:"agent_errors"`
-	SkillErrors  []skillreg.LoadError `json:"skill_errors"`
-	Conflicts    []skillreg.Conflict  `json:"skill_conflicts"`
+	Provider     string `json:"provider"`
+	ProviderOK   bool   `json:"provider_ok"`
+	ProviderErr  string `json:"provider_error,omitempty"`
+	Workspace    string `json:"workspace"`
+	ConfigPath   string `json:"config_path"`
+	DefaultAgent string `json:"default_agent"`
+	// Colors は話し手に選べる色。画面が独自に持つと、増減したときに
+	// 選べる色と実際に出る色がずれる。
+	Colors      []string             `json:"colors"`
+	AgentErrors []agent.LoadError    `json:"agent_errors"`
+	SkillErrors []skillreg.LoadError `json:"skill_errors"`
+	Conflicts   []skillreg.Conflict  `json:"skill_conflicts"`
 }
 
 // handleStatus は起動状態をまとめて返す。読み込みに失敗した定義や衝突した
@@ -30,6 +34,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		Workspace:    s.cfg.WorkspaceDir,
 		ConfigPath:   s.cfg.Path(),
 		DefaultAgent: s.cfg.DefaultAgent,
+		Colors:       agent.Colors,
 		AgentErrors:  s.agents.Errors(),
 		SkillErrors:  s.skills.Errors(),
 		Conflicts:    s.skills.Conflicts(),
@@ -58,6 +63,16 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, list)
 }
 
+// handleTools はエージェントに許可できるツールの一覧を返す。画面が名前を
+// 持つと、ツールを増減したときに選べるものと実際に動くものがずれる。
+func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
+	defs := s.tools.Defs(func(string) bool { return true })
+	if defs == nil {
+		defs = []provider.ToolDef{}
+	}
+	writeJSON(w, http.StatusOK, defs)
+}
+
 func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
 	list := s.skills.List()
 	if list == nil {
@@ -69,7 +84,9 @@ func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
 // handleReload はファイルを読み直す。定義とスキルはファイルが正なので、
 // 編集を反映させる手段として明示的な再読込を用意する。
 func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
-	s.agents.Load(s.cfg.AgentPaths)
+	// 外から規定エージェントのファイルが消されていれば、ここで補う。
+	// 入口が失われるとどのエージェントも呼べない。
+	s.reloadAgents()
 	s.skills.Load(s.cfg.SkillPaths)
 	s.handleStatus(w, r)
 }

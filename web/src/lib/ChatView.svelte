@@ -6,7 +6,7 @@
 
   let {
     session, agents, items, busy, notice, status, railHidden, onToggleRail,
-    onSend, onCancel, onApprove, onAgentChange, onDismiss,
+    onSend, onCancel, onApprove, onAgentChange, onDismiss, colorOf,
   } = $props()
 
   let scroller = $state(null)
@@ -57,28 +57,13 @@
   </button>
 
   <h1 class="title">{session?.title ?? ''}</h1>
-
-  <div class="right">
-    <select
-      value={session?.agent_id}
-      onchange={(e) => onAgentChange(e.currentTarget.value)}
-      disabled={busy}
-      aria-label="エージェント"
-    >
-      {#each agents as a (a.id)}
-        <option value={a.id}>{a.name}</option>
-      {/each}
-    </select>
-
-    {#if agent?.model}<span class="model mono">{agent.model}</span>{/if}
-  </div>
 </header>
 
 {#if missingAgent}
   <p class="banner">
     このセッションのエージェント <span class="mono">{session.agent_id}</span> の定義が
-    見つかりません。履歴は読めますが、続きは送れません。定義を戻すか、上のエージェントを
-    選び直してください。
+    見つかりません。履歴は読めますが、続きは送れません。定義を戻すか、入力欄で
+    エージェントを選び直してください。
   </p>
 {:else if providerDown}
   <p class="banner">Ollama に接続できていません。{remedy.provider_unavailable}</p>
@@ -97,7 +82,7 @@
 <div class="scroll" bind:this={scroller} use:stickToBottom={{ onPinned: (p) => (pinned = p) }}>
   <div class="stream">
     {#each items as item, i (item.id)}
-      <Item {item} {onApprove} lead={itemLeads[i]} owner={itemOwners[i]} />
+      <Item {item} {onApprove} {colorOf} lead={itemLeads[i]} owner={itemOwners[i]} />
     {/each}
   </div>
 </div>
@@ -108,7 +93,15 @@
   </div>
 {/if}
 
-<Composer disabled={missingAgent} {busy} {onSend} {onCancel} />
+<Composer
+  disabled={missingAgent}
+  {busy}
+  {agents}
+  agentId={session?.agent_id ?? ''}
+  {onSend}
+  {onCancel}
+  {onAgentChange}
+/>
 
 <style>
   header {
@@ -140,27 +133,6 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .right {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex: none;
-  }
-  .right::before {
-    content: '';
-    width: 1px;
-    height: 18px;
-    background: var(--border);
-  }
-  header select {
-    width: auto;
-    min-width: 8rem;
-    background: transparent;
-    border-color: transparent;
-    color: var(--fg-muted);
-  }
-  header select:hover { background: var(--g4); border-color: transparent; }
-  .model { color: var(--fg-dim); }
   .banner,
   .notice {
     flex: none;

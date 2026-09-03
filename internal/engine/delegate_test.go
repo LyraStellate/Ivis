@@ -70,21 +70,45 @@ func TestDelegateReturnsOnlyChildResult(t *testing.T) {
 	}
 }
 
-// 定義に列挙されていない相手へは委譲できない。
-func TestDelegateRejectsUnlistedAgent(t *testing.T) {
+// 自分より上位のエージェントは呼べない。誰を呼べるかは Tier だけで決まる。
+func TestDelegateRejectsUpwardTier(t *testing.T) {
+	result := delegateOnce(t, "child", "main")
+	if !strings.Contains(result, "下位ではない") {
+		t.Errorf("上位への委譲が拒否されていません: %q", result)
+	}
+}
+
+// 同じ Tier どうしも呼べない。呼べてしまうと、同位のあいだで循環しうる。
+func TestDelegateRejectsSameTier(t *testing.T) {
+	result := delegateOnce(t, "child", "peer")
+	if !strings.Contains(result, "下位ではない") {
+		t.Errorf("同位への委譲が拒否されていません: %q", result)
+	}
+}
+
+// 自分自身へは委譲できない。
+func TestDelegateRejectsSelf(t *testing.T) {
+	result := delegateOnce(t, "main", "main")
+	if !strings.Contains(result, "自分自身") {
+		t.Errorf("自分自身への委譲が拒否されていません: %q", result)
+	}
+}
+
+// delegateOnce は from が to へ 1 度だけ委譲を試み、ツールの結果を返す。
+func delegateOnce(t *testing.T, from, to string) string {
+	t.Helper()
 	f := newFixture(t, func(n int, req provider.Request) []provider.Event {
 		if n == 0 {
 			return []provider.Event{callTool("delegate", map[string]any{
-				"agent": "main", "task": "自分を呼ぶ",
+				"agent": to, "task": "頼む",
 			})}
 		}
 		return []provider.Event{text("やめます"), {Type: provider.EventDone}}
 	})
-	id := f.newSession(t, "main")
+	id := f.newSession(t, from)
 	if err := f.eng.Run(context.Background(), id, "頼む", f.emit); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-
 	msgs, _ := f.store.ListMessages(context.Background(), id)
 	var result string
 	for _, m := range msgs {
@@ -92,12 +116,11 @@ func TestDelegateRejectsUnlistedAgent(t *testing.T) {
 			result = m.Content
 		}
 	}
-	if !strings.Contains(result, "許可されていません") {
-		t.Errorf("未許可の委譲が拒否されていません: %q", result)
-	}
+	return result
 }
 
-// 深さの上限に達したら委譲を断る。
+// 深さの上限に達したら委譲を断る。Tier が単調に増える以上、無限には深く
+// ならないが、Tier を大きく飛ばせば依然として深くなりうる。
 func TestDelegateDepthLimit(t *testing.T) {
 	f := newFixture(t, func(n int, req provider.Request) []provider.Event {
 		if n == 0 {
@@ -131,40 +154,62 @@ func TestDelegateDepthLimit(t *testing.T) {
 	}
 }
 
-// 委譲が循環したら実行時に検出して打ち切る。
-func TestDelegateCycleDetected(t *testing.T) {
+// 記憶を有効にした子は、同じセッションでの前回のやり取りを引き継ぐ。
+func TestDelegateMemoryCarriesOver(t *testing.T) {
+	f := twoRounds(t, "remember")
+	// 4 番目の要求が 2 回目の子の生成。前回の依頼と応答が入っている。
+	req := f.mock.reqs[3]
+	var joined strings.Builder
+	for _, m := range req.Messages {
+		joined.WriteString(m.Content)
+		joined.WriteString("|")
+	}
+	got := joined.String()
+	if !strings.Contains(got, "1 回目") || !strings.Contains(got, "覚えました") {
+		t.Errorf("前回のやり取りが引き継がれていません: %q", got)
+	}
+}
+
+// 記憶を切った子は毎回まっさらな文脈で始まる。
+func TestDelegateWithoutMemoryStartsFresh(t *testing.T) {
+	f := twoRounds(t, "child")
+	req := f.mock.reqs[3]
+	for _, m := range req.Messages {
+		if strings.Contains(m.Content, "1 回目") || strings.Contains(m.Content, "覚えました") {
+			t.Errorf("引き継がないはずの文脈が入っています: %q", m.Content)
+		}
+	}
+}
+
+// twoRounds は同じ子へ 2 度続けて委譲する 1 ターンを走らせる。
+func twoRounds(t *testing.T, child string) *fixture {
+	t.Helper()
 	f := newFixture(t, func(n int, req provider.Request) []provider.Event {
 		switch n {
-		case 0: // main が loop へ
+		case 0:
 			return []provider.Event{callTool("delegate", map[string]any{
-				"agent": "loop", "task": "戻ってきて",
+				"agent": child, "task": "1 回目",
 			})}
-		case 1: // loop が main へ戻そうとする
+		case 1:
+			return []provider.Event{text("覚えました"), {Type: provider.EventDone}}
+		case 2:
 			return []provider.Event{callTool("delegate", map[string]any{
-				"agent": "main", "task": "戻る",
+				"agent": child, "task": "2 回目",
 			})}
-		case 2: // loop が断念
-			return []provider.Event{text("戻れません"), {Type: provider.EventDone}}
+		case 3:
+			return []provider.Event{text("2 回目です"), {Type: provider.EventDone}}
 		default:
-			return []provider.Event{text("了解"), {Type: provider.EventDone}}
+			return []provider.Event{text("終わり"), {Type: provider.EventDone}}
 		}
 	})
 	id := f.newSession(t, "main")
-
 	if err := f.eng.Run(context.Background(), id, "頼む", f.emit); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-
-	msgs, _ := f.store.ListMessages(context.Background(), id)
-	var found bool
-	for _, m := range msgs {
-		if m.Role == provider.RoleTool && strings.Contains(m.Content, "循環") {
-			found = true
-		}
+	if len(f.mock.reqs) < 4 {
+		t.Fatalf("生成の回数が足りません: %d", len(f.mock.reqs))
 	}
-	if !found {
-		t.Fatal("循環が検出されていません")
-	}
+	return f
 }
 
 // 承認が拒否された事実はモデルへ返す。黙って何もしないと、モデルは実行された

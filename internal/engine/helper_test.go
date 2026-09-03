@@ -99,23 +99,36 @@ func newFixture(t *testing.T, script func(n int, req provider.Request) []provide
 		"name":         "Main",
 		"model":        "mock-model",
 		"instructions": "テスト用",
+		"tier":         1,
 		"tools":        []string{"list_dir", "read_file", "write_file", "delegate"},
 		"skills":       []string{"*"},
-		"delegates":    []string{"child", "loop"},
 	})
-	// loop は循環の検出を確かめるために main を委譲先に持つ。
-	writeAgent(t, agentsDir, "loop", map[string]any{
-		"name":         "Loop",
-		"model":        "mock-model",
-		"instructions": "循環",
-		"tools":        []string{"delegate"},
-		"skills":       []string{},
-		"delegates":    []string{"main"},
-	})
+	// child は main より下位。委譲もできるので、上位や同位を呼べないことの
+	// 確認にも使う。
 	writeAgent(t, agentsDir, "child", map[string]any{
 		"name":         "Child",
 		"model":        "mock-model",
 		"instructions": "子",
+		"tier":         2,
+		"tools":        []string{"list_dir", "delegate"},
+		"skills":       []string{},
+	})
+	// peer は child と同じ Tier。同位どうしが呼べないことの確認に使う。
+	writeAgent(t, agentsDir, "peer", map[string]any{
+		"name":         "Peer",
+		"model":        "mock-model",
+		"instructions": "同位",
+		"tier":         2,
+		"tools":        []string{"list_dir"},
+		"skills":       []string{},
+	})
+	// remember は記憶を有効にした子。引き継ぎの確認に使う。
+	writeAgent(t, agentsDir, "remember", map[string]any{
+		"name":         "Remember",
+		"model":        "mock-model",
+		"instructions": "覚える",
+		"tier":         2,
+		"memory":       true,
 		"tools":        []string{"list_dir"},
 		"skills":       []string{},
 	})
@@ -128,7 +141,7 @@ func newFixture(t *testing.T, script func(n int, req provider.Request) []provide
 
 	agents := agent.NewSet()
 	agents.Load([]string{agentsDir})
-	if len(agents.List()) != 3 {
+	if len(agents.List()) != 4 {
 		t.Fatalf("エージェントが読めていません: %v", agents.Errors())
 	}
 	skills := skillreg.New()

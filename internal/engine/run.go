@@ -20,10 +20,8 @@ type runCtx struct {
 	// メッセージにぶら下げて保存し、親の会話には混ぜない。
 	parentID string
 	depth    int
-	// stack は委譲の連鎖。循環を実行時に検出するために持つ。
-	stack []string
-	msgs  []provider.Message
-	emit  Emit
+	msgs     []provider.Message
+	emit     Emit
 }
 
 // Run は利用者の入力を 1 ターン処理する。
@@ -58,7 +56,6 @@ func (e *Engine) Run(ctx context.Context, sessionID, userText string, emit Emit)
 		sessionID: sessionID,
 		agent:     ag,
 		depth:     0,
-		stack:     []string{ag.ID},
 		msgs:      toProviderMessages(history),
 		emit:      emit,
 	}
@@ -81,6 +78,7 @@ func (e *Engine) loop(ctx context.Context, rc *runCtx) (string, error) {
 			Messages: append([]provider.Message{{Role: provider.RoleSystem, Content: sys}}, rc.msgs...),
 			Tools:    defs,
 			Options:  rc.agent.Options,
+			Think:    rc.agent.Thinking,
 		}
 
 		msgID, text, calls, err := e.generate(ctx, rc, req)
@@ -130,6 +128,9 @@ func (e *Engine) generate(ctx context.Context, rc *runCtx, req provider.Request)
 		ParentID: rc.parentID, Depth: rc.depth})
 
 	var sb strings.Builder
+	// 推論の過程は本文と別に溜める。混ぜると、後から読み返したときに結論と
+	// 過程の区別がつかなくなる。
+	var think strings.Builder
 	var calls []provider.ToolCall
 	var genErr error
 
@@ -139,7 +140,7 @@ func (e *Engine) generate(ctx context.Context, rc *runCtx, req provider.Request)
 	dirty := false
 
 	persist := func(errText string) {
-		if err := e.Store.UpdateMessage(ctx, msg.ID, sb.String(), errText, calls); err != nil {
+		if err := e.Store.UpdateMessage(ctx, msg.ID, sb.String(), think.String(), errText, calls); err != nil {
 			rc.emit(Event{Type: EvtError, Depth: rc.depth, Error: "履歴の書き込みに失敗しました: " + err.Error()})
 		}
 	}
@@ -157,6 +158,10 @@ loop:
 				break loop
 			}
 			switch ev.Type {
+			case provider.EventThinking:
+				think.WriteString(ev.Text)
+				dirty = true
+				rc.emit(Event{Type: EvtThinking, MessageID: msg.ID, Depth: rc.depth, Text: ev.Text})
 			case provider.EventDelta:
 				sb.WriteString(ev.Text)
 				dirty = true
@@ -195,18 +200,11 @@ func (e *Engine) maybeSetTitle(ctx context.Context, sess *store.Session, userTex
 	_ = e.Store.UpdateSession(ctx, sess.ID, title, "")
 }
 
+// delegateAgents は指示文へ載せる委譲先を返す。誰を呼べるかは Tier だけで
+// 決まるため、定義に呼び先を列挙する必要はない。
 func (e *Engine) delegateAgents(a *agent.Agent) []*agent.Agent {
 	if !a.Allows("delegate") {
 		return nil
 	}
-	var out []*agent.Agent
-	for _, id := range a.Delegates {
-		if id == "*" {
-			return e.Agents.List()
-		}
-		if d, ok := e.Agents.Get(id); ok {
-			out = append(out, d)
-		}
-	}
-	return out
+	return e.Agents.Below(a)
 }

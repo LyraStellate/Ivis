@@ -42,6 +42,7 @@ type Approver interface {
 const (
 	EvtMessageStart  = "message_start"
 	EvtDelta         = "delta"
+	EvtThinking      = "thinking"
 	EvtMessageEnd    = "message_end"
 	EvtToolCall      = "tool_call"
 	EvtToolResult    = "tool_result"
@@ -94,6 +95,7 @@ func Reported(err error) bool {
 func KindOf(err error) string {
 	var notFound *provider.ModelNotFoundError
 	var noTools *provider.ToolsUnsupportedError
+	var noThink *provider.ThinkingUnsupportedError
 	switch {
 	case err == nil:
 		return ""
@@ -103,6 +105,8 @@ func KindOf(err error) string {
 		return "model_not_found"
 	case errors.As(err, &noTools):
 		return "tools_unsupported"
+	case errors.As(err, &noThink):
+		return "thinking_unsupported"
 	case errors.Is(err, store.ErrNotFound):
 		return "not_found"
 	}
@@ -123,8 +127,11 @@ type Engine struct {
 	Approver Approver
 }
 
-// systemPrompt はエージェントの指示文に、利用可能なスキルの一覧と作業場所の
-// 説明を足したものを返す。スキルは名前と説明だけを載せる。
+// systemPrompt はエージェントの指示文に、利用可能なスキルの一覧、任せられる
+// エージェントの一覧、作業場所の説明を足したものを返す。
+//
+// エージェントの一覧は定義群から毎回組み直す。派生ファイルとして持たせると、
+// 定義と一覧が食い違ったときにどちらが正か決められなくなる (#528664)。
 func systemPrompt(a *agent.Agent, skills []*skillreg.Skill, delegates []*agent.Agent, workspace string) string {
 	var b strings.Builder
 	b.WriteString(strings.TrimSpace(a.Instructions))
@@ -138,12 +145,23 @@ func systemPrompt(a *agent.Agent, skills []*skillreg.Skill, delegates []*agent.A
 		}
 	}
 	if len(delegates) > 0 {
-		b.WriteString("\n仕事を任せられるエージェント (delegate で呼ぶ):\n")
+		fmt.Fprintf(&b, "\nあなたは Tier %d です。仕事を任せられるのは自分より下位 "+
+			"(Tier の数字が大きい) の相手だけで、次のエージェントを delegate で呼べます:\n", a.Tier)
 		for _, d := range delegates {
-			fmt.Fprintf(&b, "- %s: %s\n", d.ID, oneLine(d.Description, 200))
+			fmt.Fprintf(&b, "- %s (Tier %d, %s): %s\n", d.ID, d.Tier, d.Name,
+				oneLine(describe(d), 200))
 		}
 	}
 	return b.String()
+}
+
+// describe は一覧に載せる説明。空のままにすると、モデルは名前だけで
+// 呼び分けることになり、選択が当てずっぽうになる。
+func describe(a *agent.Agent) string {
+	if strings.TrimSpace(a.Description) == "" {
+		return "(説明が書かれていません)"
+	}
+	return a.Description
 }
 
 func oneLine(s string, max int) string {

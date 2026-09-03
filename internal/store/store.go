@@ -22,6 +22,10 @@ import (
 // ErrNotFound は対象が存在しないこと。
 var ErrNotFound = errors.New("見つかりません")
 
+// RoleDelegate は委譲の起点として記録する印。会話の役割ではないため
+// provider の定数とは別に持つ。
+const RoleDelegate = "delegate"
+
 // Session は 1 つの会話。エージェント定義が後から削除されても ID は保持し続ける。
 type Session struct {
 	ID        string    `json:"id"`
@@ -44,10 +48,12 @@ type Message struct {
 	Content   string              `json:"content"`
 	ToolCalls []provider.ToolCall `json:"tool_calls,omitempty"`
 	ToolName  string              `json:"tool_name,omitempty"`
-	AgentID   string              `json:"agent_id"`
-	Model     string              `json:"model,omitempty"`
-	Error     string              `json:"error,omitempty"`
-	CreatedAt time.Time           `json:"created_at"`
+	// Thinking はモデルが答えに至るまでの過程。本文と分けて持つ。
+	Thinking  string    `json:"thinking,omitempty"`
+	AgentID   string    `json:"agent_id"`
+	Model     string    `json:"model,omitempty"`
+	Error     string    `json:"error,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // Store は履歴データベース。
@@ -78,6 +84,7 @@ CREATE TABLE IF NOT EXISTS messages (
   tool_name    TEXT NOT NULL DEFAULT '',
   agent_id     TEXT NOT NULL DEFAULT '',
   model        TEXT NOT NULL DEFAULT '',
+  thinking     TEXT NOT NULL DEFAULT '',
   error        TEXT NOT NULL DEFAULT '',
   created_at   INTEGER NOT NULL
 );
@@ -85,6 +92,11 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, seq);
 CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
 `
+
+// migrations は既存のデータベースへ後から加える列。順に試し、失敗は無視する。
+var migrations = []string{
+	`ALTER TABLE messages ADD COLUMN thinking TEXT NOT NULL DEFAULT ''`,
+}
 
 // Open はデータベースを開き、必要ならスキーマを作る。
 func Open(path string) (*Store, error) {
@@ -97,6 +109,11 @@ func Open(path string) (*Store, error) {
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("履歴データベースを初期化できませんでした: %w", err)
+	}
+	// 既に作られているデータベースには CREATE TABLE の変更が届かない。
+	// 足りない列だけを後から加える。既にあれば失敗するので、それは無視する。
+	for _, stmt := range migrations {
+		db.Exec(stmt)
 	}
 	return &Store{db: db}, nil
 }
@@ -229,10 +246,10 @@ func (s *Store) AppendMessage(ctx context.Context, m *Message) error {
 
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO messages (id, session_id, parent_id, seq, role, content, tool_calls,
-		                       tool_name, agent_id, model, error, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                       tool_name, thinking, agent_id, model, error, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, m.SessionID, m.ParentID, m.Seq, m.Role, m.Content, calls, m.ToolName,
-		m.AgentID, m.Model, m.Error, m.CreatedAt.UnixMilli())
+		m.Thinking, m.AgentID, m.Model, m.Error, m.CreatedAt.UnixMilli())
 	if err != nil {
 		return err
 	}
@@ -243,7 +260,7 @@ func (s *Store) AppendMessage(ctx context.Context, m *Message) error {
 
 // UpdateMessage は本文とエラーを書き換える。生成の途中でプロセスが落ちても
 // それまでの内容が失われないよう、ストリーミング中も一定間隔でこれを呼ぶ。
-func (s *Store) UpdateMessage(ctx context.Context, id, content, errText string, calls []provider.ToolCall) error {
+func (s *Store) UpdateMessage(ctx context.Context, id, content, thinking, errText string, calls []provider.ToolCall) error {
 	var raw string
 	if len(calls) > 0 {
 		b, err := json.Marshal(calls)
@@ -253,13 +270,13 @@ func (s *Store) UpdateMessage(ctx context.Context, id, content, errText string, 
 		raw = string(b)
 	}
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE messages SET content = ?, error = ?, tool_calls = ? WHERE id = ?`,
-		content, errText, raw, id)
+		`UPDATE messages SET content = ?, thinking = ?, error = ?, tool_calls = ? WHERE id = ?`,
+		content, thinking, errText, raw, id)
 	return err
 }
 
 const messageColumns = `id, session_id, parent_id, seq, role, content, tool_calls,
-                        tool_name, agent_id, model, error, created_at`
+                        tool_name, thinking, agent_id, model, error, created_at`
 
 // ListMessages はセッションの全発言を連番順に返す。委譲の子も含む。
 // UI 側で parent_id により折りたたんで表示する。
@@ -292,7 +309,7 @@ func scanMessages(rows *sql.Rows) ([]*Message, error) {
 		var calls string
 		var created int64
 		if err := rows.Scan(&m.ID, &m.SessionID, &m.ParentID, &m.Seq, &m.Role, &m.Content,
-			&calls, &m.ToolName, &m.AgentID, &m.Model, &m.Error, &created); err != nil {
+			&calls, &m.ToolName, &m.Thinking, &m.AgentID, &m.Model, &m.Error, &created); err != nil {
 			return nil, err
 		}
 		if calls != "" {
@@ -302,6 +319,47 @@ func scanMessages(rows *sql.Rows) ([]*Message, error) {
 		}
 		m.CreatedAt = time.UnixMilli(created)
 		out = append(out, &m)
+	}
+	return out, rows.Err()
+}
+
+// Delegation は過去に受けた依頼と、それに対する最終的な応答の組。
+type Delegation struct {
+	Task   string
+	Result string
+}
+
+// PastDelegations は、そのエージェントがこのセッションで過去に受けた依頼と
+// 応答を古い順に返す。記憶を有効にしたエージェントの引き継ぎに使う。
+//
+// 途中のツール実行は含めない。含めると子の入力が回数に比例して膨らみ、
+// 引き継ぎたい内容 (何を頼まれ、何を答えたか) が埋もれる。
+func (s *Store) PastDelegations(ctx context.Context, sessionID, agentID string) ([]Delegation, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT m.content,
+		        COALESCE((SELECT c.content FROM messages c
+		                   WHERE c.session_id = m.session_id AND c.parent_id = m.id
+		                     AND c.role = 'assistant' AND c.content <> ''
+		                   ORDER BY c.seq DESC LIMIT 1), '')
+		   FROM messages m
+		  WHERE m.session_id = ? AND m.agent_id = ? AND m.role = ?
+		  ORDER BY m.seq ASC`, sessionID, agentID, RoleDelegate)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Delegation
+	for rows.Next() {
+		var d Delegation
+		if err := rows.Scan(&d.Task, &d.Result); err != nil {
+			return nil, err
+		}
+		if d.Result == "" {
+			// 応答が残っていない回は引き継ぐ材料にならない。
+			continue
+		}
+		out = append(out, d)
 	}
 	return out, rows.Err()
 }

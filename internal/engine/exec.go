@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/LyraStellate/Ivis/internal/agent"
 	"github.com/LyraStellate/Ivis/internal/provider"
 	"github.com/LyraStellate/Ivis/internal/store"
 	"github.com/LyraStellate/Ivis/internal/tools"
@@ -89,7 +90,7 @@ func (e *Engine) runOneTool(ctx context.Context, rc *runCtx, callID string, call
 		Skills:        e.Skills,
 		ScriptTimeout: time.Duration(e.Cfg.ScriptTimeoutSec) * time.Second,
 		AgentID:       rc.agent.ID,
-		CanDelegateTo: rc.agent.CanDelegateTo,
+		CheckDelegate: func(id string) error { return e.checkDelegate(rc.agent, id) },
 		Delegate: func(ctx context.Context, agentID, task string) (string, error) {
 			// 呼び出しの識別子を渡し、委譲の開始と終了もその呼び出しに
 			// 結び付けられるようにする。
@@ -107,14 +108,15 @@ func (e *Engine) delegate(ctx context.Context, parent *runCtx, callID, agentID, 
 	if parent.depth+1 > e.Cfg.MaxDelegationDepth {
 		return "", fmt.Errorf("委譲の深さが上限 (%d) に達しました", e.Cfg.MaxDelegationDepth)
 	}
-	for _, id := range parent.stack {
-		if id == agentID {
-			return "", fmt.Errorf("委譲が循環しています (%s)", agentID)
-		}
+	if err := e.checkDelegate(parent.agent, agentID); err != nil {
+		return "", err
 	}
-	child, ok := e.Agents.Get(agentID)
-	if !ok {
-		return "", fmt.Errorf("エージェント %q の定義が見つかりません", agentID)
+	child, _ := e.Agents.Get(agentID)
+
+	// 引き継ぎは印を残す前に読む。これから記録する分を含めないため。
+	msgs, err := e.carryOver(ctx, parent.sessionID, child, task)
+	if err != nil {
+		return "", err
 	}
 
 	// 委譲の起点として 1 件記録する。子の発言はこれにぶら下げる。
@@ -136,8 +138,7 @@ func (e *Engine) delegate(ctx context.Context, parent *runCtx, callID, agentID, 
 		agent:     child,
 		parentID:  marker.ID,
 		depth:     parent.depth + 1,
-		stack:     append(append([]string{}, parent.stack...), child.ID),
-		msgs:      []provider.Message{{Role: provider.RoleUser, Content: task}},
+		msgs:      msgs,
 		emit:      parent.emit,
 	}
 
@@ -151,4 +152,39 @@ func (e *Engine) delegate(ctx context.Context, parent *runCtx, callID, agentID, 
 		result = "(応答がありませんでした)"
 	}
 	return result, nil
+}
+
+// checkDelegate は委譲してよい相手かを返す。断る理由を文にして返すのは、
+// これがそのままツールの結果としてモデルへ渡り、次の手を考える材料になるため。
+func (e *Engine) checkDelegate(from *agent.Agent, agentID string) error {
+	to, ok := e.Agents.Get(agentID)
+	if !ok {
+		return fmt.Errorf("エージェント %q の定義が見つかりません", agentID)
+	}
+	if to.ID == from.ID {
+		return fmt.Errorf("自分自身には委譲できません")
+	}
+	if !from.CanDelegateTo(to) {
+		return fmt.Errorf("エージェント %q (Tier %d) は自分 (Tier %d) より下位ではないため呼べません",
+			to.ID, to.Tier, from.Tier)
+	}
+	return nil
+}
+
+// carryOver は子へ渡す入力を組み立てる。記憶が有効なら、同じセッションで
+// 過去に受けた依頼と応答を先に置く。無効なら依頼文だけで始める。
+func (e *Engine) carryOver(ctx context.Context, sessionID string, child *agent.Agent, task string) ([]provider.Message, error) {
+	var msgs []provider.Message
+	if child.Memory {
+		past, err := e.Store.PastDelegations(ctx, sessionID, child.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, d := range past {
+			msgs = append(msgs,
+				provider.Message{Role: provider.RoleUser, Content: d.Task},
+				provider.Message{Role: provider.RoleAssistant, Content: d.Result})
+		}
+	}
+	return append(msgs, provider.Message{Role: provider.RoleUser, Content: task}), nil
 }

@@ -32,6 +32,9 @@ type Message struct {
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 	// ToolName は Role が tool のとき、どのツールの結果かを示す。
 	ToolName string `json:"tool_name,omitempty"`
+	// Thinking はモデルが答えに至るまでの過程。本文と分けて持つ。混ぜると
+	// 後から読み返したときに結論と過程の区別がつかなくなる。
+	Thinking string `json:"thinking,omitempty"`
 }
 
 // ToolDef はモデルに渡すツールの定義。
@@ -47,6 +50,8 @@ type Request struct {
 	Messages []Message
 	Tools    []ToolDef
 	Options  map[string]any
+	// Think はモデルの推論機能を使うか。対応しないモデルでは失敗する。
+	Think bool
 }
 
 // EventType はストリーム上の出来事の種類。
@@ -55,6 +60,8 @@ type EventType string
 const (
 	// EventDelta はトークン片。
 	EventDelta EventType = "delta"
+	// EventThinking は推論の過程の断片。本文とは別に流す。
+	EventThinking EventType = "thinking"
 	// EventToolCalls はモデルがツール呼び出しを要求したこと。
 	EventToolCalls EventType = "tool_calls"
 	// EventDone は生成の正常終了。
@@ -109,4 +116,12 @@ type ToolsUnsupportedError struct{ Model string }
 
 func (e *ToolsUnsupportedError) Error() string {
 	return fmt.Sprintf("モデル %q はツール呼び出しに対応していません", e.Model)
+}
+
+// ThinkingUnsupportedError はモデルが推論に対応していないこと。
+// 利用者が次にすべきことは「推論を切るか、対応するモデルへ変える」である。
+type ThinkingUnsupportedError struct{ Model string }
+
+func (e *ThinkingUnsupportedError) Error() string {
+	return fmt.Sprintf("モデル %q は推論に対応していません", e.Model)
 }

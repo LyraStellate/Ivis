@@ -1,10 +1,15 @@
 <script>
   import * as api from './api.js'
   import { trapFocus } from './focus.js'
+  import AgentSettings from './AgentSettings.svelte'
 
   // 設定は会話を差し替えない。重ねて開き、閉じると元の会話がそのまま残る。
   // 画面の中央に浮かせる。右端は今後の右パネルのための場所として空けておく。
-  let { agents, onClose } = $props()
+  let { agents, onClose, onAgentsChanged } = $props()
+
+  // 設定とエージェント設定は同じ窓を差し替える。窓を 2 つ開くと、どちらが
+  // 手前かを利用者が管理することになる。
+  let view = $state('settings')
 
   let cfg = $state(null)
   let status = $state(null)
@@ -75,7 +80,24 @@
 </script>
 
 <div class="veil" role="presentation" onclick={(e) => e.target === e.currentTarget && onClose()}>
-  <div class="sheet" role="dialog" aria-modal="true" aria-label="設定" use:trapFocus>
+  <div
+    class="sheet"
+    class:wide={view === 'agents'}
+    role="dialog"
+    aria-modal="true"
+    aria-label="設定"
+    use:trapFocus
+  >
+    {#if view === 'agents'}
+      <AgentSettings
+        {agents}
+        {models}
+        colors={status?.colors ?? []}
+        onBack={() => (view = 'settings')}
+        onClose={onClose}
+        onChanged={onAgentsChanged}
+      />
+    {:else}
     <header>
       <h2>設定</h2>
       <button bind:this={closeBtn} class="quiet" onclick={onClose}>閉じる <kbd>Esc</kbd></button>
@@ -99,13 +121,21 @@
         </fieldset>
 
         <fieldset>
-          <legend>既定のエージェント</legend>
-          <select bind:value={cfg.default_agent}>
-            {#each agents as a (a.id)}
-              <option value={a.id}>{a.name} ({a.id})</option>
-            {/each}
-          </select>
-          <p class="hint">新しい会話を始めたときに選ばれます。</p>
+          <legend>エージェント</legend>
+          <!-- 定義そのものを直す場所へは、設定から入る。同じ窓が切り替わる。 -->
+          <button class="nav" onclick={() => (view = 'agents')}>
+            <span>エージェント設定</span>
+            <span class="count">{agents.length} 件</span>
+            <span class="chev">›</span>
+          </button>
+          <label>
+            新しい会話を始める相手
+            <select bind:value={cfg.default_agent}>
+              {#each agents as a (a.id)}
+                <option value={a.id}>{a.name} ({a.id})</option>
+              {/each}
+            </select>
+          </label>
         </fieldset>
 
         <fieldset>
@@ -166,6 +196,7 @@
         {saving ? '保存中…' : '保存して読み直す'}
       </button>
     </footer>
+    {/if}
   </div>
 </div>
 
@@ -191,6 +222,11 @@
     border: 1px solid var(--border-strong);
     border-radius: var(--radius-lg);
     box-shadow: 0 18px 50px rgb(0 0 0 / 0.55);
+  }
+  /* エージェント設定は一覧と編集を並べるので、その分だけ広げる。 */
+  .sheet.wide {
+    width: min(62rem, 100%);
+    max-height: min(46rem, 100%);
   }
   header {
     display: flex;
@@ -243,6 +279,18 @@
     margin-top: 10px;
   }
   textarea { resize: vertical; font: 12px var(--mono); }
+
+  /* 別の画面へ入る行。設定の項目と同じ幅に置き、押せることを右の印で示す。 */
+  .nav {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 9px;
+    text-align: left;
+  }
+  .nav .count { color: var(--fg-muted); font-size: 11px; }
+  .nav .chev { margin-left: auto; color: var(--g9); }
 
   .hint { color: var(--fg-muted); font-size: 12px; margin: 4px 0 0; }
   .err { color: var(--danger-text); font-size: 12px; margin: 4px 0 0; overflow-wrap: anywhere; }

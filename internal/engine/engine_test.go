@@ -50,6 +50,11 @@ func TestSystemPromptListsToolsAndDelegates(t *testing.T) {
 	if !strings.Contains(req.Messages[0].Content, "child") {
 		t.Error("委譲先が指示文に列挙されていません")
 	}
+	// 一覧は Tier で絞る。呼べない相手を載せると、モデルは呼べるものとして
+	// 選び、断られる往復が増える。
+	if strings.Contains(req.Messages[0].Content, "main (Tier") {
+		t.Error("自分自身が委譲先として載っています")
+	}
 	// 定義で許可したツールだけが渡る。
 	names := map[string]bool{}
 	for _, d := range req.Tools {
@@ -179,3 +184,22 @@ var errBroken = errBrokenType{}
 type errBrokenType struct{}
 
 func (errBrokenType) Error() string { return "接続が切れました" }
+
+// 下位のエージェントからは上位が見えない。呼べない相手を指示文へ載せると、
+// モデルはそれを選び、断られる往復だけが増える。
+func TestSystemPromptHidesHigherTiers(t *testing.T) {
+	f := newFixture(t, func(n int, req provider.Request) []provider.Event {
+		return []provider.Event{text("ok"), {Type: provider.EventDone}}
+	})
+	id := f.newSession(t, "child")
+	if err := f.eng.Run(context.Background(), id, "やあ", f.emit); err != nil {
+		t.Fatal(err)
+	}
+
+	sys := f.mock.reqs[0].Messages[0].Content
+	for _, name := range []string{"main", "peer"} {
+		if strings.Contains(sys, name+" (Tier") {
+			t.Errorf("呼べない相手 %q が指示文に載っています", name)
+		}
+	}
+}

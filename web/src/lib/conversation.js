@@ -53,9 +53,9 @@ function buildGroup(byParent, key) {
 
       case 'assistant':
         pending = (m.tool_calls ?? []).slice()
-        // 本文もエラーも無い発言は、ツールを呼ぶためだけの生成だった。
+        // 本文もエラーも推論も無い発言は、ツールを呼ぶためだけの生成だった。
         // 空の吹き出しを残さない。
-        if (m.content || m.error) {
+        if (m.content || m.error || m.thinking) {
           out.push({
             id: m.id,
             kind: 'agent',
@@ -63,6 +63,7 @@ function buildGroup(byParent, key) {
             agentId: m.agent_id,
             model: m.model,
             text: m.content,
+            thinking: m.thinking || '',
             error: m.error || '',
             time: m.created_at,
           })
@@ -193,6 +194,7 @@ export class Transcript {
           status: 'streaming',
           agentId: ev.agent_id,
           text: '',
+          thinking: '',
           error: '',
         })
         break
@@ -203,11 +205,18 @@ export class Transcript {
         break
       }
 
+      // 推論は本文と別に溜める。混ぜると結論と過程の区別がつかなくなる。
+      case 'thinking': {
+        const it = findById(box, ev.message_id)
+        if (it) it.thinking += ev.text ?? ''
+        break
+      }
+
       case 'message_end': {
         const it = findById(box, ev.message_id)
         if (!it) break
         it.status = 'done'
-        if (!it.text && !it.error) remove(box, it)
+        if (!it.text && !it.error && !it.thinking) remove(box, it)
         break
       }
 

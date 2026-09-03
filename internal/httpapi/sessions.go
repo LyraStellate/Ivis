@@ -104,10 +104,3 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, list)
 }
-
-func statusFor(err error) int {
-	if errors.Is(err, store.ErrNotFound) {
-		return http.StatusNotFound
-	}
-	return http.StatusInternalServerError
-}

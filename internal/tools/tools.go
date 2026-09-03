@@ -26,8 +26,9 @@ type ExecContext struct {
 	AgentID string
 	// Delegate は委譲の実行。engine が注入する。
 	Delegate func(ctx context.Context, agentID, task string) (string, error)
-	// CanDelegateTo は委譲先として許可されているかの判定。
-	CanDelegateTo func(agentID string) bool
+	// CheckDelegate は委譲先として許可されているかの判定。許されないときは
+	// 理由を返す。理由はそのままモデルへ渡り、次の手を考える材料になる。
+	CheckDelegate func(agentID string) error
 }
 
 // Tool はモデルから呼べる 1 つの機能。

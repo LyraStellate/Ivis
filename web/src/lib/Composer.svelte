@@ -1,7 +1,19 @@
 <script>
   import { isSubmit } from './keys.js'
 
-  let { disabled = false, busy = false, onSend, onCancel } = $props()
+  let {
+    disabled = false,
+    busy = false,
+    agents = [],
+    agentId = '',
+    onSend,
+    onCancel,
+    onAgentChange,
+  } = $props()
+
+  // いま誰が答えるかは、書く場所のすぐ隣にあるべきである。画面の隅に置くと、
+  // 送る直前に相手を確かめる動作が視線の往復になる。
+  const current = $derived(agents.find((a) => a.id === agentId) ?? null)
 
   let draft = $state('')
   let area = $state(null)
@@ -66,6 +78,22 @@
       aria-label="メッセージ"
     ></textarea>
     <div class="bar">
+      {#if agents.length > 0}
+        <label class="who">
+          <span class="sr">エージェント</span>
+          <select
+            value={agentId}
+            onchange={(e) => onAgentChange?.(e.currentTarget.value)}
+            disabled={busy}
+          >
+            {#each agents as a (a.id)}
+              <option value={a.id}>{a.name}</option>
+            {/each}
+          </select>
+        </label>
+        {#if current?.model}<span class="model mono">{current.model}</span>{/if}
+      {/if}
+
       <span class="hint">
         {busy ? '生成中は送信できません。Esc で中断' : 'Shift + Enter で改行'}
       </span>
@@ -135,6 +163,32 @@
   .hint {
     font-size: 11px;
     color: var(--g9);
+  }
+
+  /* 相手とモデルは、書く手を邪魔しない大きさに留める。決めるのは設定側で、
+     ここは今の相手を確かめて切り替えるだけの場所である。 */
+  .who select {
+    height: 24px;
+    padding: 0 22px 0 8px;
+    font-size: 11px;
+    background-color: transparent;
+    border-color: transparent;
+  }
+  .who select:hover:not(:disabled) {
+    background-color: var(--control);
+    border-color: var(--border);
+  }
+  .model {
+    flex: none;
+    font-size: 11px;
+    color: var(--g9);
+  }
+  .sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
   }
 
   .go {
