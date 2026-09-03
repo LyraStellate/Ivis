@@ -138,6 +138,14 @@ func (s *Server) beginRun(id string, cancel context.CancelFunc) bool {
 	return true
 }
 
+// isRunning はそのセッションで生成が走っているかを返す。
+func (s *Server) isRunning(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, busy := s.running[id]
+	return busy
+}
+
 func (s *Server) endRun(id string) {
 	s.mu.Lock()
 	cancel, ok := s.running[id]

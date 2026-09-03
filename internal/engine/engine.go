@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/LyraStellate/Ivis/internal/agent"
 	"github.com/LyraStellate/Ivis/internal/config"
@@ -40,6 +42,7 @@ type Approver interface {
 
 // イベント種別。UI はこれを見て表示を組み立てる。
 const (
+	EvtUserSaved     = "user_saved"
 	EvtMessageStart  = "message_start"
 	EvtDelta         = "delta"
 	EvtThinking      = "thinking"
@@ -50,6 +53,7 @@ const (
 	EvtDelegateStart = "delegate_start"
 	EvtDelegateEnd   = "delegate_end"
 	EvtError         = "error"
+	EvtUsage         = "usage"
 	EvtDone          = "done"
 )
 
@@ -72,6 +76,10 @@ type Event struct {
 	// 同じことを二重に言う。
 	Kind     string           `json:"kind,omitempty"`
 	Approval *ApprovalRequest `json:"approval,omitempty"`
+	// PromptTokens はモデルへ送った入力のトークン数、ContextLimit はその
+	// モデルの文脈長。分母が分からないときは 0 で、画面は割合を出さない。
+	PromptTokens int `json:"prompt_tokens,omitempty"`
+	ContextLimit int `json:"context_limit,omitempty"`
 }
 
 // reportedError は、その失敗が既にイベントとして流されたことを示す包み。
@@ -125,6 +133,56 @@ type Engine struct {
 	Tools    *tools.Registry
 	Provider provider.Provider
 	Approver Approver
+
+	// ctxLen はモデルごとの文脈長。毎ターン提供元へ問い合わせるほど変わる
+	// ものではない。ゼロ値で使えるので初期化は要らない。
+	ctxLen sync.Map
+}
+
+// noteUsage は 1 ターンで使った文脈の量を記録し、画面へ流す。
+//
+// 委譲された子では記録しない。見せているのは利用者が次に送れる量であり、
+// 子は別の文脈で走るためである。
+func (e *Engine) noteUsage(ctx context.Context, rc *runCtx, u *provider.Usage) {
+	if u == nil || rc.depth != 0 {
+		return
+	}
+	limit := e.contextLimit(ctx, rc.agent)
+	if err := e.Store.SetContextUsage(ctx, rc.sessionID, u.PromptTokens, limit); err != nil {
+		return
+	}
+	rc.emit(Event{Type: EvtUsage, PromptTokens: u.PromptTokens, ContextLimit: limit})
+}
+
+// contextLimit は割合の分母を返す。定義に指定があればそれを、無ければモデル
+// 自身が持つ値を使う。どちらも得られなければ 0 を返し、画面は割合を出さない。
+func (e *Engine) contextLimit(ctx context.Context, a *agent.Agent) int {
+	if n := numOption(a.Options["num_ctx"]); n > 0 {
+		return n
+	}
+	if v, ok := e.ctxLen.Load(a.Model); ok {
+		return v.(int)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	n, err := e.Provider.ContextLength(ctx, a.Model)
+	if err != nil {
+		return 0
+	}
+	e.ctxLen.Store(a.Model, n)
+	return n
+}
+
+// numOption は設定から数値を取り出す。JSON から来ると float64 に、
+// 画面や試験から来ると int になるため、どちらも受ける。
+func numOption(v any) int {
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	}
+	return 0
 }
 
 // systemPrompt はエージェントの指示文に、利用可能なスキルの一覧、任せられる
@@ -136,7 +194,7 @@ func systemPrompt(a *agent.Agent, skills []*skillreg.Skill, delegates []*agent.A
 	var b strings.Builder
 	b.WriteString(strings.TrimSpace(a.Instructions))
 	b.WriteString("\n\n")
-	fmt.Fprintf(&b, "作業ディレクトリは %s です。ファイル操作はこの中に限られます。\n", workspace)
+	fmt.Fprintf(&b, "この会話の作業ディレクトリは %s です。ファイル操作はこの中に限られます。\n", workspace)
 
 	if len(skills) > 0 {
 		b.WriteString("\n利用できるスキル (必要になったら load_skill で本文を読むこと):\n")

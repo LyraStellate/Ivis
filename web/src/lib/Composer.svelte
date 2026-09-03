@@ -1,11 +1,14 @@
 <script>
   import { isSubmit } from './keys.js'
+  import Gauge from './Gauge.svelte'
 
   let {
     disabled = false,
     busy = false,
     agents = [],
     agentId = '',
+    usage = null,
+    draftBack = null,
     onSend,
     onCancel,
     onAgentChange,
@@ -17,6 +20,14 @@
 
   let draft = $state('')
   let area = $state(null)
+
+  // 巻き戻した依頼を書きかけとして戻す。消してから同じ文を打ち直させる
+  // 理由がない。入れ物ごと差し替わるので、同じ本文でも毎回反映される。
+  $effect(() => {
+    if (!draftBack) return
+    draft = draftBack.text
+    area?.focus()
+  })
 
   // 打った分だけ伸ばす。行数を決め打つと、短い依頼では無駄に空き、長い依頼
   // では書いたものが見えない。上限を超えたらその中で送る。
@@ -93,6 +104,8 @@
         </label>
         {#if current?.model}<span class="model mono">{current.model}</span>{/if}
       {/if}
+
+      <Gauge tokens={usage?.tokens ?? 0} limit={usage?.limit ?? 0} />
 
       <span class="hint">
         {busy ? '生成中は送信できません。Esc で中断' : 'Shift + Enter で改行'}

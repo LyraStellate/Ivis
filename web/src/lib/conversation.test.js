@@ -214,3 +214,31 @@ describe('推論', () => {
     expect(tx.items[0].thinking).toBe('過程')
   })
 })
+
+describe('送信した発言の識別子', () => {
+  it('保存された識別子で差し替える', () => {
+    // 差し替えないと、その発言を指す操作 (巻き戻し) が開き直すまで使えない。
+    const tx = new Transcript([])
+    tx.pushUser('頼む')
+    const local = tx.items[0].id
+    tx.apply({ type: 'user_saved', message_id: 'srv-1' })
+    expect(local).not.toBe('srv-1')
+    expect(tx.items[0].id).toBe('srv-1')
+  })
+
+  it('識別子が来なければそのまま', () => {
+    const tx = new Transcript([])
+    tx.pushUser('頼む')
+    const local = tx.items[0].id
+    tx.apply({ type: 'user_saved' })
+    expect(tx.items[0].id).toBe(local)
+  })
+
+  it('差し替えは 1 度きり', () => {
+    const tx = new Transcript([])
+    tx.pushUser('1 回目')
+    tx.apply({ type: 'user_saved', message_id: 'srv-1' })
+    tx.apply({ type: 'user_saved', message_id: 'srv-2' })
+    expect(tx.items[0].id).toBe('srv-1')
+  })
+})

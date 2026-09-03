@@ -21,6 +21,11 @@
   let notice = $state(null)
   let settingsOpen = $state(false)
   let pendingDelete = $state(null)
+  let pendingRewind = $state(null)
+
+  // 直前のターンで文脈をどれだけ使ったか。会話を開いた時点では保存された値、
+  // 生成中は流れてくるイベントで更新する。
+  let usage = $state(null)
   let railHidden = $state(false)
 
   let controller = null
@@ -53,6 +58,7 @@
     session = sessions.find((s) => s.id === id) ?? (await guard(() => api.getSession(id)))
     const history = await guard(() => api.listMessages(id))
     tx.loadHistory(history ?? [])
+    usage = usageOf(session)
     notice = null
   }
 
@@ -74,6 +80,52 @@
     pendingDelete = null
   }
 
+  // 分母が無いときは何も出さない。割合を推定で出すと嘘になる。
+  function usageOf(sess) {
+    if (!sess?.context_limit) return null
+    return { tokens: sess.context_tokens ?? 0, limit: sess.context_limit }
+  }
+
+  // 巻き戻しはファイルを戻さない。会話だけが戻ることを確認で明示する。
+  function askRewind(item) {
+    if (busy) return
+    pendingRewind = { item, count: countFrom(item) }
+  }
+
+  // 消える件数は、いま見えている行の数で数える。委譲のまとまりは中身も
+  // まとめて消えるので、その分も数える。
+  function countFrom(item) {
+    const i = items.indexOf(item)
+    if (i < 0) return 0
+    let n = 0
+    const walk = (list) => {
+      for (const it of list) {
+        n += 1
+        if (it.children) walk(it.children)
+      }
+    }
+    walk(items.slice(i))
+    return n
+  }
+
+  async function rewind() {
+    const target = pendingRewind
+    pendingRewind = null
+    if (!target || !currentId) return
+    const res = await guard(() => api.rewindSession(currentId, target.item.id))
+    if (!res) return
+    session = res.session
+    sessions = sessions.map((s) => (s.id === session.id ? session : s))
+    usage = usageOf(session)
+    const history = await guard(() => api.listMessages(currentId))
+    tx.loadHistory(history ?? [])
+    draftBack = { text: res.text }
+  }
+
+  // 巻き戻した依頼は入力欄へ戻す。やり直す動機はほぼ常に言い直すことにある。
+  // 同じ本文を続けて戻すこともあるため、値ではなく入れ物ごと差し替える。
+  let draftBack = $state(null)
+
   async function changeAgent(agentId) {
     if (!currentId) return
     const updated = await guard(() => api.patchSession(currentId, { agent_id: agentId }))
@@ -92,6 +144,9 @@
     try {
       for await (const ev of api.send(currentId, text, controller.signal)) {
         if (ev.type === 'error' && !ev.message_id) notice = { kind: ev.kind, text: ev.error }
+        if (ev.type === 'usage') {
+          usage = ev.context_limit ? { tokens: ev.prompt_tokens ?? 0, limit: ev.context_limit } : null
+        }
         tx.apply(ev)
       }
     } catch (e) {
@@ -133,6 +188,8 @@
         settingsOpen = false
       } else if (pendingDelete) {
         pendingDelete = null
+      } else if (pendingRewind) {
+        pendingRewind = null
       } else if (busy) {
         cancel()
       }
@@ -170,7 +227,10 @@
         {notice}
         {status}
         {colorOf}
+        {usage}
+        {draftBack}
         onSend={send}
+        onRewind={askRewind}
         onCancel={cancel}
         onApprove={approve}
         onAgentChange={changeAgent}
@@ -214,6 +274,17 @@
         settingsOpen = false
         refreshMeta()
       }}
+    />
+  {/if}
+
+  {#if pendingRewind}
+    <Confirm
+      title="ここからやり直しますか"
+      body={pendingRewind.item.text}
+      note={`この依頼から後の ${pendingRewind.count} 件が履歴ごと消えます。作ったファイルは戻りません。`}
+      confirmLabel="やり直す"
+      onConfirm={rewind}
+      onCancel={() => (pendingRewind = null)}
     />
   {/if}
 

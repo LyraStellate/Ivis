@@ -21,6 +21,7 @@ type mockProvider struct {
 	script func(n int, req provider.Request) []provider.Event
 	calls  int
 	reqs   []provider.Request
+	ctxLen int
 }
 
 func (m *mockProvider) Name() string { return "mock" }
@@ -40,6 +41,11 @@ func (m *mockProvider) Chat(ctx context.Context, req provider.Request) (<-chan p
 
 func (m *mockProvider) Models(ctx context.Context) ([]provider.Model, error) { return nil, nil }
 func (m *mockProvider) Health(ctx context.Context) error                     { return nil }
+
+// ctxLen は文脈長として返す値。0 なら「分からない」を表す。
+func (m *mockProvider) ContextLength(ctx context.Context, model string) (int, error) {
+	return m.ctxLen, nil
+}
 
 func text(s string) provider.Event {
 	return provider.Event{Type: provider.EventDelta, Text: s}

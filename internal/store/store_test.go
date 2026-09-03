@@ -1,0 +1,139 @@
+package store
+
+import (
+	"context"
+	"errors"
+	"path/filepath"
+	"testing"
+
+	"github.com/LyraStellate/Ivis/internal/provider"
+)
+
+func open(t *testing.T) *Store {
+	t.Helper()
+	st, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	return st
+}
+
+// add は 1 件足して ID を返す。
+func add(t *testing.T, st *Store, sessionID, parentID, role, content, agentID string) string {
+	t.Helper()
+	m := &Message{SessionID: sessionID, ParentID: parentID, Role: role, Content: content, AgentID: agentID}
+	if err := st.AppendMessage(context.Background(), m); err != nil {
+		t.Fatal(err)
+	}
+	return m.ID
+}
+
+// 巻き戻しは起点以降だけを消し、それより前は残す。委譲された子も、親より
+// 後の連番を持つのでまとめて消える。
+func TestRewind(t *testing.T) {
+	ctx := context.Background()
+	st := open(t)
+	sess, err := st.CreateSession(ctx, "main", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	keepUser := add(t, st, sess.ID, "", provider.RoleUser, "1 回目", "main")
+	keepMarker := add(t, st, sess.ID, "", RoleDelegate, "調べて", "child")
+	add(t, st, sess.ID, keepMarker, provider.RoleAssistant, "調べました", "child")
+	add(t, st, sess.ID, "", provider.RoleAssistant, "できました", "main")
+
+	from := add(t, st, sess.ID, "", provider.RoleUser, "2 回目", "main")
+	marker := add(t, st, sess.ID, "", RoleDelegate, "もう一度", "child")
+	add(t, st, sess.ID, marker, provider.RoleAssistant, "調べました 2", "child")
+	add(t, st, sess.ID, "", provider.RoleAssistant, "できました 2", "main")
+
+	n, text, err := st.Rewind(ctx, sess.ID, from)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 4 {
+		t.Errorf("消した件数 = %d, want 4", n)
+	}
+	if text != "2 回目" {
+		t.Errorf("戻す本文 = %q, want %q", text, "2 回目")
+	}
+
+	left, err := st.ListMessages(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 4 {
+		t.Fatalf("残った件数 = %d, want 4", len(left))
+	}
+	if left[0].ID != keepUser {
+		t.Error("起点より前が消えています")
+	}
+	// 起点より前の委譲は、子ごと残る。
+	var nested int
+	for _, m := range left {
+		if m.ParentID != "" {
+			nested++
+		}
+	}
+	if nested != 1 {
+		t.Errorf("残った子の件数 = %d, want 1", nested)
+	}
+}
+
+// 起点にできるのは最上位の利用者の発言だけ。モデルの発言を起点にできても、
+// 消したあとに何を送ればよいかが決まらない。
+func TestRewindRejectsNonUser(t *testing.T) {
+	ctx := context.Background()
+	st := open(t)
+	sess, _ := st.CreateSession(ctx, "main", "")
+
+	assistant := add(t, st, sess.ID, "", provider.RoleAssistant, "答え", "main")
+	marker := add(t, st, sess.ID, "", RoleDelegate, "依頼", "child")
+	child := add(t, st, sess.ID, marker, provider.RoleUser, "子の中の依頼", "child")
+
+	for _, id := range []string{assistant, marker, child} {
+		if _, _, err := st.Rewind(ctx, sess.ID, id); !errors.Is(err, ErrNotRewindable) {
+			t.Errorf("%s: err = %v, want ErrNotRewindable", id, err)
+		}
+	}
+}
+
+// 別のセッションの発言は起点にできない。
+func TestRewindRejectsOtherSession(t *testing.T) {
+	ctx := context.Background()
+	st := open(t)
+	a, _ := st.CreateSession(ctx, "main", "")
+	b, _ := st.CreateSession(ctx, "main", "")
+	id := add(t, st, a.ID, "", provider.RoleUser, "頼む", "main")
+
+	if _, _, err := st.Rewind(ctx, b.ID, id); !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// 巻き戻すと文脈使用量は不明に戻る。前のターンの値を残すと、消したはずの
+// 分を数えたままの割合が出る。
+func TestRewindClearsUsage(t *testing.T) {
+	ctx := context.Background()
+	st := open(t)
+	sess, _ := st.CreateSession(ctx, "main", "")
+	id := add(t, st, sess.ID, "", provider.RoleUser, "頼む", "main")
+
+	if err := st.SetContextUsage(ctx, sess.ID, 1200, 8192); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := st.GetSession(ctx, sess.ID)
+	if got.ContextTokens != 1200 || got.ContextLimit != 8192 {
+		t.Fatalf("使用量が保存されていません: %+v", got)
+	}
+
+	if _, _, err := st.Rewind(ctx, sess.ID, id); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = st.GetSession(ctx, sess.ID)
+	if got.ContextTokens != 0 || got.ContextLimit != 0 {
+		t.Errorf("使用量が残っています: %+v", got)
+	}
+}

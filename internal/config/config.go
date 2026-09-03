@@ -114,6 +114,24 @@ func (c *Config) Save() error {
 	return os.WriteFile(c.path, append(b, '\n'), 0o644)
 }
 
+// SeriesDir は直列に進む会話の作業場所を束ねる段の名前。
+//
+// 実行形態の段を 1 つ挟むのは、この先の並列セッションが別の形の識別子
+// (1 つの会話から枝分かれした複数の実行) を持つためである。挟んでおけば、
+// 並列を入れるときに直列側のパスを変えずに済む (#903215)。
+const SeriesDir = "series"
+
+// SessionWorkspace はそのセッションの作業ディレクトリを返す。
+//
+// 場所は ID から一意に決まる派生物なので、どこにも保存しない。保存すると
+// 作業ディレクトリの設定を変えたときに食い違う。
+func (c *Config) SessionWorkspace(sessionID string) string {
+	if sessionID == "" {
+		return c.WorkspaceDir
+	}
+	return filepath.Join(c.WorkspaceDir, SeriesDir, sessionID)
+}
+
 // Path は設定の読み込み元を返す。
 func (c *Config) Path() string { return c.path }
 

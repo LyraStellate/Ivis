@@ -86,7 +86,9 @@ func (e *Engine) runOneTool(ctx context.Context, rc *runCtx, callID string, call
 	}
 
 	ec := &tools.ExecContext{
-		Workspace:     e.Cfg.WorkspaceDir,
+		// 作業場所は会話ごとに分ける。委譲された子も同じ場所を使う。子は親の
+		// 依頼の一部を担うのであり、成果物の置き場を分ける理由がない。
+		Workspace:     e.Cfg.SessionWorkspace(rc.sessionID),
 		Skills:        e.Skills,
 		ScriptTimeout: time.Duration(e.Cfg.ScriptTimeoutSec) * time.Second,
 		AgentID:       rc.agent.ID,

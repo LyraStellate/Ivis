@@ -70,12 +70,23 @@ const (
 	EventError EventType = "error"
 )
 
+// Usage は 1 回の生成で使われた量。提供元の実測値をそのまま持つ。
+// 自前で数えないのは、数え方がモデルごとに違い、推定は必ずずれるためである。
+type Usage struct {
+	// PromptTokens はモデルへ送った入力のトークン数。
+	PromptTokens int
+	// EvalTokens は生成された出力のトークン数。
+	EvalTokens int
+}
+
 // Event はストリーム上の 1 件。
 type Event struct {
 	Type      EventType
 	Text      string
 	ToolCalls []ToolCall
 	Err       error
+	// Usage は EventDone に載る。得られない提供元では nil。
+	Usage *Usage
 }
 
 // Model は提供元が持つモデルの情報。
@@ -94,6 +105,8 @@ type Provider interface {
 	Chat(ctx context.Context, req Request) (<-chan Event, error)
 	// Models は利用可能なモデルの一覧。
 	Models(ctx context.Context) ([]Model, error)
+	// ContextLength はモデルが持つ文脈長を返す。分からなければ 0 を返す。
+	ContextLength(ctx context.Context, model string) (int, error)
 	// Health は提供元に到達できるかを確かめる。
 	Health(ctx context.Context) error
 }

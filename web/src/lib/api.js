@@ -39,6 +39,8 @@ export const createSession = (agent_id) => fetch('/api/sessions', json('POST', {
 export const patchSession = (id, patch) => fetch(`/api/sessions/${id}`, json('PATCH', patch)).then(unwrap)
 export const deleteSession = (id) => fetch(`/api/sessions/${id}`, { method: 'DELETE' }).then(unwrap)
 export const listMessages = (id) => fetch(`/api/sessions/${id}/messages`).then(unwrap)
+export const rewindSession = (id, message_id) =>
+  fetch(`/api/sessions/${id}/rewind`, json('POST', { message_id })).then(unwrap)
 export const cancelRun = (id) => fetch(`/api/sessions/${id}/cancel`, json('POST')).then(unwrap)
 export const respondApproval = (id, approved) =>
   fetch(`/api/approvals/${id}`, json('POST', { approved })).then(unwrap)

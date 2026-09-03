@@ -71,6 +71,9 @@ type chatChunk struct {
 	Message chatMessage `json:"message"`
 	Done    bool        `json:"done"`
 	Error   string      `json:"error"`
+	// 最後のチャンクにだけ載る。入力に何トークン使ったかの実測値。
+	PromptEvalCount int `json:"prompt_eval_count"`
+	EvalCount       int `json:"eval_count"`
 }
 
 // Chat は生成を開始する。返されたチャネルは必ず done か error で終わる。
@@ -139,6 +142,7 @@ func (c *Client) stream(ctx context.Context, resp *http.Response, model string, 
 
 	dec := json.NewDecoder(resp.Body)
 	var calls []provider.ToolCall
+	var usage *provider.Usage
 
 	for {
 		var chunk chatChunk
@@ -176,6 +180,12 @@ func (c *Client) stream(ctx context.Context, resp *http.Response, model string, 
 			})
 		}
 		if chunk.Done {
+			if chunk.PromptEvalCount > 0 {
+				usage = &provider.Usage{
+					PromptTokens: chunk.PromptEvalCount,
+					EvalTokens:   chunk.EvalCount,
+				}
+			}
 			break
 		}
 	}
@@ -185,7 +195,7 @@ func (c *Client) stream(ctx context.Context, resp *http.Response, model string, 
 			return
 		}
 	}
-	send(provider.Event{Type: provider.EventDone})
+	send(provider.Event{Type: provider.EventDone, Usage: usage})
 }
 
 type tagsResponse struct {
@@ -276,4 +286,51 @@ func classify(model string, status int, raw []byte) error {
 		return fmt.Errorf("Ollama がエラーを返しました (status %d): %s", status, msg)
 	}
 	return fmt.Errorf("Ollama がエラーを返しました: %s", msg)
+}
+
+// showResponse は /api/show の必要な部分だけを受ける。
+type showResponse struct {
+	// ModelInfo はアーキテクチャ名を接頭辞に持つ雑多な値の集まりで、文脈長は
+	// "<arch>.context_length" という名前で入る。名前が固定でないため、
+	// 接尾辞で探す。
+	ModelInfo map[string]any `json:"model_info"`
+}
+
+// ContextLength はモデルが持つ文脈長を返す。分からなければ 0 を返す。
+// 分母が無いときに割合を出すと嘘になるので、呼び出し側はそれを見て諦める。
+func (c *Client) ContextLength(ctx context.Context, model string) (int, error) {
+	body, err := json.Marshal(map[string]string{"model": model})
+	if err != nil {
+		return 0, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/show", bytes.NewReader(body))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("%w (%s): %v", provider.ErrUnavailable, c.baseURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
+		return 0, classify(model, resp.StatusCode, raw)
+	}
+
+	var sr showResponse
+	if err := json.NewDecoder(resp.Body).Decode(&sr); err != nil {
+		return 0, err
+	}
+	for k, v := range sr.ModelInfo {
+		if !strings.HasSuffix(k, ".context_length") {
+			continue
+		}
+		// JSON の数値は float64 で入る。
+		if f, ok := v.(float64); ok && f > 0 {
+			return int(f), nil
+		}
+	}
+	return 0, nil
 }

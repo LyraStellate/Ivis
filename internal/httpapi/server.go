@@ -109,6 +109,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/sessions/{id}/messages", s.handleMessages)
 	mux.HandleFunc("POST /api/sessions/{id}/messages", s.handleSend)
 	mux.HandleFunc("POST /api/sessions/{id}/cancel", s.handleCancel)
+	mux.HandleFunc("POST /api/sessions/{id}/rewind", s.handleRewind)
 	mux.HandleFunc("POST /api/approvals/{id}", s.handleApproval)
 
 	mux.Handle("/", s.staticHandler())
@@ -154,6 +155,8 @@ func statusFor(err error) int {
 		return http.StatusBadRequest
 	case errors.Is(err, store.ErrNotFound):
 		return http.StatusNotFound
+	case errors.Is(err, store.ErrNotRewindable):
+		return http.StatusBadRequest
 	}
 	return http.StatusInternalServerError
 }

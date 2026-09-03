@@ -111,7 +111,8 @@ func report(cfg *config.Config, agents *agent.Set, skills *skillreg.Registry, ad
 	fmt.Printf("Ivis  http://%s\n", addr)
 	fmt.Printf("  設定          %s\n", cfg.Path())
 	fmt.Printf("  Ollama        %s\n", cfg.OllamaBaseURL)
-	fmt.Printf("  作業ディレクトリ %s\n", cfg.WorkspaceDir)
+	fmt.Printf("  作業ディレクトリ %s (会話ごとに %s/<ID> へ分かれる)\n",
+		cfg.WorkspaceDir, config.SeriesDir)
 	fmt.Printf("  エージェント    %d 件\n", len(agents.List()))
 	fmt.Printf("  スキル          %d 件\n", len(skills.List()))
 

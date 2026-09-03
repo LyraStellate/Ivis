@@ -35,14 +35,18 @@ func (e *Engine) Run(ctx context.Context, sessionID, userText string, emit Emit)
 		return fmt.Errorf("エージェント %q の定義が見つかりません。定義ファイルが削除されたか、読み込みに失敗しています", sess.AgentID)
 	}
 
-	if err := e.Store.AppendMessage(ctx, &store.Message{
+	userMsg := &store.Message{
 		SessionID: sessionID,
 		Role:      provider.RoleUser,
 		Content:   userText,
 		AgentID:   ag.ID,
-	}); err != nil {
+	}
+	if err := e.Store.AppendMessage(ctx, userMsg); err != nil {
 		return fmt.Errorf("入力を保存できませんでした: %w", err)
 	}
+	// 画面は送った本文を先に自前で置く。保存された識別子を返しておかないと、
+	// その発言を指す操作 (巻き戻し) が、開き直すまでできない。
+	emit(Event{Type: EvtUserSaved, MessageID: userMsg.ID})
 	// 保存されていないのに保存されたように見える状態を作らないため、
 	// 履歴の書き込み失敗はここで返す。
 	e.maybeSetTitle(ctx, sess, userText)
@@ -68,7 +72,8 @@ func (e *Engine) Run(ctx context.Context, sessionID, userText string, emit Emit)
 
 // loop はツール呼び出しが無くなるまで生成を繰り返す。最後の本文を返す。
 func (e *Engine) loop(ctx context.Context, rc *runCtx) (string, error) {
-	sys := systemPrompt(rc.agent, e.Skills.Filter(rc.agent.Skills), e.delegateAgents(rc.agent), e.Cfg.WorkspaceDir)
+	sys := systemPrompt(rc.agent, e.Skills.Filter(rc.agent.Skills), e.delegateAgents(rc.agent),
+		e.Cfg.SessionWorkspace(rc.sessionID))
 	defs := e.Tools.Defs(rc.agent.Allows)
 
 	var last string
@@ -172,6 +177,7 @@ loop:
 				genErr = ev.Err
 				break loop
 			case provider.EventDone:
+				e.noteUsage(ctx, rc, ev.Usage)
 				break loop
 			}
 		}

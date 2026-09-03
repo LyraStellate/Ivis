@@ -6,7 +6,7 @@
 
   let {
     session, agents, items, busy, notice, status, railHidden, onToggleRail,
-    onSend, onCancel, onApprove, onAgentChange, onDismiss, colorOf,
+    onSend, onCancel, onApprove, onAgentChange, onDismiss, onRewind, colorOf, usage, draftBack,
   } = $props()
 
   let scroller = $state(null)
@@ -57,6 +57,12 @@
   </button>
 
   <h1 class="title">{session?.title ?? ''}</h1>
+
+  <!-- この会話のファイルがどこに落ちるか。会話ごとに場所が違うので、
+       どこを見ればよいか分からないままになる。 -->
+  {#if session?.workspace}
+    <span class="place mono" title={session.workspace}>{session.workspace}</span>
+  {/if}
 </header>
 
 {#if missingAgent}
@@ -82,7 +88,14 @@
 <div class="scroll" bind:this={scroller} use:stickToBottom={{ onPinned: (p) => (pinned = p) }}>
   <div class="stream">
     {#each items as item, i (item.id)}
-      <Item {item} {onApprove} {colorOf} lead={itemLeads[i]} owner={itemOwners[i]} />
+      <Item
+        {item}
+        {onApprove}
+        {colorOf}
+        onRewind={busy ? null : onRewind}
+        lead={itemLeads[i]}
+        owner={itemOwners[i]}
+      />
     {/each}
   </div>
 </div>
@@ -98,6 +111,8 @@
   {busy}
   {agents}
   agentId={session?.agent_id ?? ''}
+  {usage}
+  {draftBack}
   {onSend}
   {onCancel}
   {onAgentChange}
@@ -121,6 +136,18 @@
     height: 22px;
     padding: 0;
     color: var(--fg-dim);
+  }
+  /* 場所は題名を押しのけない。長いので末尾ではなく先頭を削る。 */
+  .place {
+    flex: 0 1 auto;
+    min-width: 0;
+    font-size: 11px;
+    color: var(--fg-dim);
+    direction: rtl;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .title {
     flex: 1;

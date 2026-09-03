@@ -6,7 +6,21 @@
   import { leads, owners } from './group.js'
   import { whoColor, USER_COLOR, USER_NAME } from './who.js'
 
-  let { item, onApprove, colorOf = null, lead = true, owner = null, nested = false } = $props()
+  let {
+    item,
+    onApprove,
+    onRewind = null,
+    colorOf = null,
+    lead = true,
+    owner = null,
+    nested = false,
+  } = $props()
+
+  // 巻き戻せるのは、保存済みの利用者の発言だけ。委譲の中の発言は、消したあと
+  // に何を送ればよいかが決まらないので起点にしない。
+  const canRewind = $derived(
+    onRewind != null && !nested && item.kind === 'user' && !String(item.id).startsWith('sent-'),
+  )
 
   // 誰のターンの中にいるか。ターン全体を括る細い縦線の色になる。
   const ownColor = $derived(owner?.isUser ? 'var(--g7)' : whoColor(owner?.agentId, colorOf))
@@ -48,6 +62,11 @@
   <div class="line" class:user={isUserTurn} class:nested style:--own={ownColor}>
     {#if item.kind === 'user'}
       <div class="body plain">{item.text}</div>
+      {#if canRewind}
+        <button class="rewind quiet" onclick={() => onRewind(item)}>
+          ここからやり直す
+        </button>
+      {/if}
 
     {:else if item.kind === 'agent'}
       <div class="body">
@@ -140,6 +159,24 @@
 </div>
 
 <style>
+  /* やり直しは、その依頼の上で手を止めたときだけ出す。常に見えていると、
+     会話を読む間ずっと消す操作が視界に入る。 */
+  .rewind {
+    position: absolute;
+    top: 0;
+    right: 0;
+    padding: 1px 6px;
+    font-size: 11px;
+    color: var(--fg-dim);
+    background: var(--bg);
+    opacity: 0;
+    transition: opacity var(--dur) var(--ease);
+  }
+  .item:hover .rewind,
+  .rewind:focus-visible {
+    opacity: 1;
+  }
+
   /* 推論は本文の前に置くが、地に沈めて結論より前へ出ない扱いにする。 */
   .think {
     margin: 0 0 6px;
@@ -200,6 +237,7 @@
 
   /* ターン全体を話し手の色で薄く括る。委譲の縦線 (濃い色) と役割が分かれる。 */
   .line {
+    position: relative;
     padding-left: 11px;
     border-left: 2px solid color-mix(in srgb, var(--own) 50%, transparent);
   }

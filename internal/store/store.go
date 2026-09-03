@@ -28,11 +28,17 @@ const RoleDelegate = "delegate"
 
 // Session は 1 つの会話。エージェント定義が後から削除されても ID は保持し続ける。
 type Session struct {
-	ID        string    `json:"id"`
-	Title     string    `json:"title"`
-	AgentID   string    `json:"agent_id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	AgentID string `json:"agent_id"`
+	// ContextTokens は直前のターンでモデルへ送った入力のトークン数、
+	// ContextLimit はそのときの文脈長。会話を開き直したときに、生成を待たず
+	// 前回の状態を出せるようにするために持つ。発言ごとに持たないのは、
+	// 見せたいのが「いま次を送れるか」であって推移ではないため。
+	ContextTokens int       `json:"context_tokens"`
+	ContextLimit  int       `json:"context_limit"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // Message は会話の 1 発言。
@@ -66,11 +72,13 @@ PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS sessions (
-  id         TEXT PRIMARY KEY,
-  title      TEXT NOT NULL,
-  agent_id   TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  id             TEXT PRIMARY KEY,
+  title          TEXT NOT NULL,
+  agent_id       TEXT NOT NULL,
+  context_tokens INTEGER NOT NULL DEFAULT 0,
+  context_limit  INTEGER NOT NULL DEFAULT 0,
+  created_at     INTEGER NOT NULL,
+  updated_at     INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -96,6 +104,8 @@ CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
 // migrations は既存のデータベースへ後から加える列。順に試し、失敗は無視する。
 var migrations = []string{
 	`ALTER TABLE messages ADD COLUMN thinking TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE sessions ADD COLUMN context_tokens INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE sessions ADD COLUMN context_limit INTEGER NOT NULL DEFAULT 0`,
 }
 
 // Open はデータベースを開き、必要ならスキーマを作る。
@@ -147,10 +157,13 @@ func (s *Store) CreateSession(ctx context.Context, agentID, title string) (*Sess
 	return sess, nil
 }
 
+const sessionColumns = `id, title, agent_id, context_tokens, context_limit,
+                        created_at, updated_at`
+
 // ListSessions は更新の新しい順に一覧を返す。
 func (s *Store) ListSessions(ctx context.Context) ([]*Session, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, title, agent_id, created_at, updated_at FROM sessions ORDER BY updated_at DESC`)
+		`SELECT `+sessionColumns+` FROM sessions ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +173,8 @@ func (s *Store) ListSessions(ctx context.Context) ([]*Session, error) {
 	for rows.Next() {
 		var sess Session
 		var created, updated int64
-		if err := rows.Scan(&sess.ID, &sess.Title, &sess.AgentID, &created, &updated); err != nil {
+		if err := rows.Scan(&sess.ID, &sess.Title, &sess.AgentID,
+			&sess.ContextTokens, &sess.ContextLimit, &created, &updated); err != nil {
 			return nil, err
 		}
 		sess.CreatedAt = time.UnixMilli(created)
@@ -175,8 +189,9 @@ func (s *Store) GetSession(ctx context.Context, id string) (*Session, error) {
 	var sess Session
 	var created, updated int64
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, title, agent_id, created_at, updated_at FROM sessions WHERE id = ?`, id).
-		Scan(&sess.ID, &sess.Title, &sess.AgentID, &created, &updated)
+		`SELECT `+sessionColumns+` FROM sessions WHERE id = ?`, id).
+		Scan(&sess.ID, &sess.Title, &sess.AgentID,
+			&sess.ContextTokens, &sess.ContextLimit, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -362,4 +377,54 @@ func (s *Store) PastDelegations(ctx context.Context, sessionID, agentID string) 
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+// ErrNotRewindable は巻き戻しの起点にできない発言を指したこと。
+var ErrNotRewindable = errors.New("この発言からは巻き戻せません")
+
+// SetContextUsage は直前のターンの文脈使用量を記録する。
+func (s *Store) SetContextUsage(ctx context.Context, sessionID string, tokens, limit int) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE sessions SET context_tokens = ?, context_limit = ? WHERE id = ?`,
+		tokens, limit, sessionID)
+	return err
+}
+
+// Rewind は指定した利用者の発言と、それ以降の全ての発言を消す。
+// 消した件数と、入力欄へ戻す本文を返す。
+//
+// 起点を利用者の発言に限るのは、やり直しの単位が「あの依頼から」だからで
+// ある。モデルの発言の途中を起点にできても、消したあとに何を送ればよいかが
+// 決まらない。委譲された子の発言も、親より後の連番を持つのでまとめて消える。
+func (s *Store) Rewind(ctx context.Context, sessionID, messageID string) (int, string, error) {
+	var seq int64
+	var role, content, parentID string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT seq, role, content, parent_id FROM messages WHERE id = ? AND session_id = ?`,
+		messageID, sessionID).Scan(&seq, &role, &content, &parentID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, "", ErrNotFound
+	}
+	if err != nil {
+		return 0, "", err
+	}
+	if role != provider.RoleUser || parentID != "" {
+		return 0, "", ErrNotRewindable
+	}
+
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM messages WHERE session_id = ? AND seq >= ?`, sessionID, seq)
+	if err != nil {
+		return 0, "", err
+	}
+	n, _ := res.RowsAffected()
+
+	// 実測値が無くなったので使用量は不明に戻す。前のターンの値を残すと、
+	// 消したはずの分を数えたままの割合が出る。
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE sessions SET context_tokens = 0, context_limit = 0, updated_at = ? WHERE id = ?`,
+		time.Now().UnixMilli(), sessionID); err != nil {
+		return 0, "", err
+	}
+	return int(n), content, nil
 }

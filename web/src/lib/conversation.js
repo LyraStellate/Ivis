@@ -127,11 +127,14 @@ export class Transcript {
     this.items = items
     // 委譲の深さごとの容れ物。containers[0] が最上位。
     this.containers = [items]
+    // 送信直後の発言。保存された識別子が届いたら差し替える。
+    this.lastSent = null
   }
 
   reset() {
     this.items.length = 0
     this.containers = [this.items]
+    this.lastSent = null
   }
 
   /** 確定履歴を読み込む。組み立て直すので、途中の状態は捨てる。 */
@@ -149,13 +152,15 @@ export class Transcript {
   /** 送信した本文を先に置く。応答を待つ間、何を送ったかが見えるようにする。 */
   pushUser(text) {
     this.containers = [this.items]
-    this.items.push({
+    const item = {
       id: localId('sent'),
       kind: 'user',
       status: 'done',
       text,
       time: new Date().toISOString(),
-    })
+    }
+    this.items.push(item)
+    this.lastSent = item
   }
 
   /**
@@ -186,6 +191,13 @@ export class Transcript {
     const box = this.containerAt(depth)
 
     switch (ev.type) {
+      // 送った本文は画面が先に置いている。保存された識別子を受け取って
+      // 差し替え、その発言を指す操作 (巻き戻し) をすぐ使えるようにする。
+      case 'user_saved':
+        if (this.lastSent && ev.message_id) this.lastSent.id = ev.message_id
+        this.lastSent = null
+        break
+
       case 'message_start':
         box.push({
           id: ev.message_id,
