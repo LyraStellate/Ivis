@@ -42,6 +42,7 @@
     saved = false
     try {
       cfg = await api.putConfig({
+        listen: cfg.listen,
         ollama_base_url: cfg.ollama_base_url,
         default_agent: cfg.default_agent,
         workspace_dir: cfg.workspace_dir,
@@ -69,6 +70,14 @@
       .split('\n')
       .map((s) => s.trim())
       .filter(Boolean)
+
+  // ループバック以外へ束ねようとしているか。認証を持たない以上、これは
+  // 利用者が知ったうえで選ぶことであって、黙って通してよい設定ではない。
+  const openToNetwork = $derived.by(() => {
+    const host = (cfg?.listen ?? '').replace(/:[^:]*$/, '').replace(/[[\]]/g, '')
+    if (!host) return false
+    return !(host === '127.0.0.1' || host === 'localhost' || host === '::1')
+  })
 
   const problems = $derived([
     ...(status?.agent_errors ?? []).map((e) => `エージェント ${e.path}: ${e.reason}`),
@@ -113,6 +122,22 @@
             Ollama の接続先
             <input bind:value={cfg.ollama_base_url} />
           </label>
+          <label>
+            待ち受けアドレス
+            <input bind:value={cfg.listen} placeholder="127.0.0.1:8317" />
+          </label>
+          <p class="hint">
+            この端末だけで使うなら <span class="mono">127.0.0.1:8317</span>。他の端末から
+            開くなら <span class="mono">0.0.0.0:8317</span> ですべての経路に開くか、
+            <span class="mono">100.x.y.z:8317</span> のように VPN のアドレスだけに絞ります。
+            変更は再起動後に効きます。
+          </p>
+          {#if openToNetwork}
+            <p class="err">
+              いま入れているアドレスは、この端末の外から届きます。Ivis に認証は無く、
+              届く相手はファイルの読み書きとスクリプトの実行を頼めます。
+            </p>
+          {/if}
           {#if status && !status.provider_ok}
             <p class="err">接続できません。Ollama を起動してから保存し直してください。</p>
           {:else if models.length}

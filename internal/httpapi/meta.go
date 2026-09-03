@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"fmt"
+	"net"
 	"net/http"
 
 	"github.com/LyraStellate/Ivis/internal/agent"
@@ -108,6 +110,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 // 画面から変えられないと利用者は接続先ひとつ直すのにも editor を開くことになる。
 func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	var in struct {
+		Listen             string   `json:"listen"`
 		OllamaBaseURL      string   `json:"ollama_base_url"`
 		DefaultAgent       string   `json:"default_agent"`
 		AgentPaths         []string `json:"agent_paths"`
@@ -123,6 +126,16 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if in.Listen != "" {
+		// 形だけ確かめる。ここを通した値で次の起動が失敗すると、画面から
+		// 直すこともできなくなる。
+		if _, _, err := net.SplitHostPort(in.Listen); err != nil {
+			writeError(w, http.StatusBadRequest,
+				fmt.Errorf("待ち受けアドレスは 127.0.0.1:8317 のような形で指定してください: %v", err))
+			return
+		}
+		s.cfg.Listen = in.Listen
+	}
 	if in.OllamaBaseURL != "" {
 		s.cfg.OllamaBaseURL = in.OllamaBaseURL
 	}
