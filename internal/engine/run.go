@@ -103,7 +103,7 @@ func (e *Engine) loop(ctx context.Context, rc *runCtx) (string, error) {
 	// 打ち切ったうえで、理由を利用者に示す。
 	msg := fmt.Sprintf("ツール呼び出しが %d 回に達したため打ち切りました。", e.Cfg.MaxIterations)
 	rc.emit(Event{Type: EvtError, Depth: rc.depth, AgentID: rc.agent.ID, Error: msg})
-	return last, errors.New(msg)
+	return last, reported(errors.New(msg))
 }
 
 // generate は 1 回の生成を行い、保存した発言の識別子・本文・ツール呼び出しを返す。
@@ -111,8 +111,9 @@ func (e *Engine) loop(ctx context.Context, rc *runCtx) (string, error) {
 func (e *Engine) generate(ctx context.Context, rc *runCtx, req provider.Request) (string, string, []provider.ToolCall, error) {
 	stream, err := e.Provider.Chat(ctx, req)
 	if err != nil {
-		rc.emit(Event{Type: EvtError, Depth: rc.depth, AgentID: rc.agent.ID, Error: err.Error()})
-		return "", "", nil, err
+		rc.emit(Event{Type: EvtError, Depth: rc.depth, AgentID: rc.agent.ID,
+			Error: err.Error(), Kind: KindOf(err)})
+		return "", "", nil, reported(err)
 	}
 
 	msg := &store.Message{
@@ -175,8 +176,8 @@ loop:
 		// 部分出力は保存したうえでエラーとして示す。続きは再試行できる。
 		persist(genErr.Error())
 		rc.emit(Event{Type: EvtError, MessageID: msg.ID, Depth: rc.depth,
-			AgentID: rc.agent.ID, Error: genErr.Error()})
-		return msg.ID, sb.String(), nil, genErr
+			AgentID: rc.agent.ID, Error: genErr.Error(), Kind: KindOf(genErr)})
+		return msg.ID, sb.String(), nil, reported(genErr)
 	}
 	persist("")
 	rc.emit(Event{Type: EvtMessageEnd, MessageID: msg.ID, Depth: rc.depth})

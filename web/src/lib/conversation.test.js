@@ -165,3 +165,14 @@ describe('ストリームの反映', () => {
     expect(t.items[1].approvalId).toBe('')
   })
 })
+
+it('同じ瞬間に届いた通知が同じ識別子にならない', () => {
+  // 時刻を識別子にすると、同じミリ秒に 2 件届いたときに衝突して
+  // 描画が同一の項目と誤認する。
+  const items = []
+  const tx = new Transcript(items)
+  tx.apply({ type: 'error', error: '1 件目' })
+  tx.apply({ type: 'error', error: '2 件目' })
+  expect(items).toHaveLength(2)
+  expect(items[0].id).not.toBe(items[1].id)
+})

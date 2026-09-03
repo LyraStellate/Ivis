@@ -68,14 +68,19 @@
   .md :global(> :first-child) { margin-top: 0; }
   .md :global(> :last-child) { margin-bottom: 0; }
 
+  /* 見出しは本文と 1px 差では読み分けられない。大きさと明るさの両方で
+     段を付ける。 */
   .md :global(h1),
   .md :global(h2),
   .md :global(h3) {
-    font-size: 14px;
-    margin: 1.2em 0 0.5em;
-    line-height: 1.5;
+    color: var(--fg-bright);
+    font-weight: 600;
+    line-height: 1.4;
+    margin: 1.4em 0 0.5em;
   }
-  .md :global(h1) { font-size: 15px; }
+  .md :global(h1) { font-size: 17px; }
+  .md :global(h2) { font-size: 15px; }
+  .md :global(h3) { font-size: 13px; }
   .md :global(p) { margin: 0.6em 0; }
   .md :global(ul), .md :global(ol) { margin: 0.6em 0; padding-left: 1.4em; }
   .md :global(li) { margin: 0.2em 0; }
@@ -85,18 +90,18 @@
     border-left: 2px solid var(--border);
     color: var(--fg-muted);
   }
-  .md :global(a) { color: var(--accent-text); }
+  .md :global(a) { color: var(--accent-line); }
   .md :global(hr) { border: none; border-top: 1px solid var(--border); margin: 1.2em 0; }
 
   .md :global(code) {
-    background: var(--n3);
+    background: var(--g2);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     padding: 0 3px;
   }
   .md :global(pre) {
     margin: 0;
-    background: var(--n1);
+    background: var(--sunken);
     border: 1px solid var(--border);
     border-top: none;
     border-radius: 0 0 var(--radius) var(--radius);
@@ -114,7 +119,7 @@
     justify-content: space-between;
     margin-top: 0.7em;
     padding: 3px 6px 3px 11px;
-    background: var(--n2);
+    background: var(--g2);
     border: 1px solid var(--border);
     border-radius: var(--radius) var(--radius) 0 0;
     font: 11px var(--mono);
@@ -143,5 +148,5 @@
     padding: 3px 8px;
     text-align: left;
   }
-  .md :global(th) { background: var(--n3); }
+  .md :global(th) { background: var(--g2); }
 </style>

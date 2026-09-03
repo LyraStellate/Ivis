@@ -4,7 +4,6 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io/fs"
 	"net/http"
 	"sync"
@@ -130,21 +129,9 @@ func writeError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, errorBody{Error: err.Error(), Kind: kindOf(err)})
 }
 
-func kindOf(err error) string {
-	var notFound *provider.ModelNotFoundError
-	var noTools *provider.ToolsUnsupportedError
-	switch {
-	case errors.Is(err, provider.ErrUnavailable):
-		return "provider_unavailable"
-	case errors.As(err, &notFound):
-		return "model_not_found"
-	case errors.As(err, &noTools):
-		return "tools_unsupported"
-	case errors.Is(err, store.ErrNotFound):
-		return "not_found"
-	}
-	return ""
-}
+// 種類の判定は engine が持つ。ストリーム上の失敗と HTTP の失敗で分類が
+// 食い違うと、同じ原因が画面上で別物として見える。
+func kindOf(err error) string { return engine.KindOf(err) }
 
 func decodeJSON(r *http.Request, v any) error {
 	defer r.Body.Close()

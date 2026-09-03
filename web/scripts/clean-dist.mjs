@@ -2,9 +2,12 @@
 // ならない。vite の emptyOutDir に任せると .gitkeep ごと消えて、新規クローンで
 // Go のビルドが通らなくなる。中身だけを消す。
 import { readdirSync, rmSync, mkdirSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 
-const dist = new URL('../dist/', import.meta.url).pathname
+// URL.pathname は Windows で "/D:/..." を返し、fs はこれを相対パスとして
+// 扱って "D:\D:\..." を作ろうとする。fileURLToPath を通す。
+const dist = fileURLToPath(new URL('../dist/', import.meta.url))
 mkdirSync(dist, { recursive: true })
 
 for (const name of readdirSync(dist)) {

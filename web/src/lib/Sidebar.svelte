@@ -1,10 +1,15 @@
 <script>
+  import { byBucket } from './format.js'
+
   let { sessions, agents, status, currentId, busy, onOpen, onNew, onDelete, onReload, onSettings } =
     $props()
 
   let listEl = $state(null)
 
   const agentName = (id) => agents.find((a) => a.id === id)?.name ?? id
+
+  // 一覧は更新の新しい順に届く。同じ区分が続く間をひとまとまりにする。
+  const groups = $derived(byBucket(sessions))
 
   const problems = $derived(
     (status?.agent_errors?.length ?? 0) +
@@ -26,7 +31,7 @@
 
 <aside>
   <header>
-    <span class="brand">IVIS</span>
+    <span class="brand">ivis</span>
     <span class="state" class:ok={status?.provider_ok}>
       <span class="dot"></span>
       {status?.provider_ok ? 'ollama' : '未接続'}
@@ -34,33 +39,44 @@
   </header>
 
   <div class="list" bind:this={listEl}>
-    {#each sessions as s (s.id)}
-      <div class="row" class:current={s.id === currentId}>
-        <button
-          class="open"
-          onclick={() => onOpen(s.id)}
-          onkeydown={onListKeydown}
-          disabled={busy && s.id !== currentId}
-        >
-          <span class="name">{s.title}</span>
-          <span class="agent">{agentName(s.agent_id)}</span>
-        </button>
-        <button class="del quiet" title="この会話を削除" onclick={() => onDelete(s)}>×</button>
-      </div>
+    {#each groups as g (g.label)}
+      <p class="bucket">{g.label}</p>
+      {#each g.items as s (s.id)}
+        <div class="row" class:current={s.id === currentId}>
+          <button
+            class="open"
+            onclick={() => onOpen(s.id)}
+            onkeydown={onListKeydown}
+            disabled={busy && s.id !== currentId}
+          >
+            <span class="name">{s.title}</span>
+            <span class="agent">{agentName(s.agent_id)}</span>
+          </button>
+          <button class="del quiet" title="この会話を削除" onclick={() => onDelete(s)}>
+            <svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true">
+              <path
+                d="M3 3 L9 9 M9 3 L3 9"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+        </div>
+      {/each}
     {:else}
-      <p class="hint">まだ会話がありません。</p>
+      <p class="hint">会話はまだありません</p>
     {/each}
   </div>
 
   <footer>
     {#if problems > 0}
       <button class="issues quiet" onclick={onSettings}>
-        読み込みの問題 {problems} 件
+        読み込めなかった定義が {problems} 件
       </button>
     {/if}
-    <button class="new" onclick={() => onNew()} disabled={agents.length === 0}>
-      新しい会話
-    </button>
+    <button class="new" onclick={() => onNew()} disabled={agents.length === 0}>新しい会話</button>
     <div class="acts">
       <button class="quiet" onclick={onReload}>再読込</button>
       <button class="quiet" onclick={onSettings}>設定</button>
@@ -74,39 +90,37 @@
     flex-direction: column;
     min-height: 0;
     overflow: hidden;
-    background: var(--surface);
-    border-right: 1px solid var(--border);
+    background: var(--rail);
   }
 
   header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 10px 12px;
+    padding: 0 12px;
+    height: 40px;
+    flex: none;
     border-bottom: 1px solid var(--border);
   }
   .brand {
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.22em;
-    color: var(--fg);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--fg-bright);
   }
   .state {
     display: inline-flex;
     align-items: center;
     gap: 5px;
     font-size: 11px;
-    color: var(--fg-muted);
+    color: var(--fg-dim);
   }
-  .dot {
+  .state .dot {
     width: 6px;
     height: 6px;
     border-radius: 50%;
     background: var(--danger);
   }
-  .state.ok .dot {
-    background: var(--ok);
-  }
+  .state.ok .dot { background: var(--ok); }
 
   .list {
     flex: 1;
@@ -115,21 +129,25 @@
     padding: 6px;
   }
 
-  /* 通常・hover・選択を別々の段で表す。選択は面の色だけでなく左の帯でも示す。 */
+  .bucket {
+    margin: 10px 0 3px;
+    padding: 0 8px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--fg-dim);
+  }
+  .bucket:first-child { margin-top: 2px; }
+
+  /* 通常・hover・選択を、面と文字の明るさの 2 つで分ける。
+     文字が 2 つ目の手段になるので、左端に帯を足さなくても区別が付く。 */
   .row {
     display: flex;
     align-items: stretch;
     border-radius: var(--radius);
-    border-left: 2px solid transparent;
-    transition: background-color var(--dur) var(--ease), border-color var(--dur) var(--ease);
   }
-  .row:hover {
-    background: var(--control-hover);
-  }
-  .row.current {
-    background: var(--control-active);
-    border-left-color: var(--accent);
-  }
+  .row:hover { background: var(--g4); }
+  .row.current { background: var(--g5); }
 
   .open {
     flex: 1;
@@ -139,70 +157,67 @@
     text-align: left;
     background: transparent;
     border-color: transparent;
-    padding: 5px 8px;
+    padding: 4px 8px;
+    color: var(--fg-dim);
   }
   .open:hover:not(:disabled) {
     background: transparent;
     border-color: transparent;
+    color: var(--fg);
   }
+  .row.current .open { color: var(--fg-bright); }
+  .open:disabled { color: var(--g9); }
+
   .name {
+    font-weight: 500;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .agent {
     font-size: 11px;
-    color: var(--fg-muted);
+    color: var(--g9);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   .del {
+    display: grid;
+    place-items: center;
     align-self: center;
-    padding: 0 7px;
-    font-size: 14px;
-    line-height: 1;
+    width: 20px;
+    height: 20px;
+    margin-right: 4px;
+    padding: 0;
+    flex: none;
+    color: var(--fg-dim);
     opacity: 0;
   }
   .row:hover .del,
-  .del:focus-visible {
-    opacity: 1;
-  }
-  .del:hover {
-    color: var(--danger-text);
-    background: var(--danger-surface);
-  }
+  .del:focus-visible { opacity: 1; }
+  .del:hover { color: var(--danger-text); background: var(--danger-surface); }
 
   .hint {
-    color: var(--fg-muted);
+    color: var(--fg-dim);
     font-size: 12px;
     padding: 6px 8px;
   }
 
   footer {
+    flex: none;
     border-top: 1px solid var(--border);
     padding: 8px;
     display: grid;
     gap: 6px;
   }
-  .new {
-    width: 100%;
-  }
-  .acts {
-    display: flex;
-    gap: 6px;
-  }
-  .acts button {
-    flex: 1;
-  }
+  .new { width: 100%; }
+  .acts { display: flex; gap: 6px; }
+  .acts button { flex: 1; }
   .issues {
     color: var(--danger-text);
     font-size: 11px;
     text-align: left;
   }
-  .issues:hover {
-    background: var(--danger-surface);
-    color: var(--danger-text);
-  }
+  .issues:hover { background: var(--danger-surface); color: var(--danger-text); }
 </style>

@@ -68,7 +68,11 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 			send(engine.Event{Type: engine.EvtDone, Text: "中断しました"})
 			return
 		}
-		send(engine.Event{Type: engine.EvtError, Error: err.Error()})
+		// 実行ループが既に流した失敗は、ここでもう一度流さない。同じ文が
+		// 2 度並ぶと、どちらを読めばよいか分からなくなる。
+		if !engine.Reported(err) {
+			send(engine.Event{Type: engine.EvtError, Error: err.Error(), Kind: kindOf(err)})
+		}
 	}
 }
 

@@ -7,6 +7,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -61,11 +62,51 @@ type Event struct {
 	Text      string `json:"text,omitempty"`
 	Tool      string `json:"tool,omitempty"`
 	// ToolCallID は tool_call と tool_result と approval_request を結び付ける。
-	ToolCallID string           `json:"tool_call_id,omitempty"`
-	Args       map[string]any   `json:"args,omitempty"`
-	Result     string           `json:"result,omitempty"`
-	Error      string           `json:"error,omitempty"`
-	Approval   *ApprovalRequest `json:"approval,omitempty"`
+	ToolCallID string         `json:"tool_call_id,omitempty"`
+	Args       map[string]any `json:"args,omitempty"`
+	Result     string         `json:"result,omitempty"`
+	Error      string         `json:"error,omitempty"`
+	// Kind は失敗の種類。画面が「Ollama を起動する」「モデルを pull する」と
+	// いった次の行動を出し分けるために要る。種類が無いと、上端の帯と通知が
+	// 同じことを二重に言う。
+	Kind     string           `json:"kind,omitempty"`
+	Approval *ApprovalRequest `json:"approval,omitempty"`
+}
+
+// reportedError は、その失敗が既にイベントとして流されたことを示す包み。
+// 実行ループは失敗をイベントで知らせたうえで同じ error を返すため、受け手が
+// それをもう一度流すと、同じ文が 2 度並ぶ。
+type reportedError struct{ error }
+
+func (e reportedError) Unwrap() error { return e.error }
+
+// reported は「イベントとして流し済み」の印を付ける。
+func reported(err error) error { return reportedError{err} }
+
+// Reported は失敗が既にイベントとして流されたかを返す。
+func Reported(err error) bool {
+	var r reportedError
+	return errors.As(err, &r)
+}
+
+// KindOf は失敗を種類の名前へ写す。まとめて「エラーが発生しました」にすると、
+// 提供元の起動忘れなのか設定の誤りなのかを利用者が判断できない。
+func KindOf(err error) string {
+	var notFound *provider.ModelNotFoundError
+	var noTools *provider.ToolsUnsupportedError
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, provider.ErrUnavailable):
+		return "provider_unavailable"
+	case errors.As(err, &notFound):
+		return "model_not_found"
+	case errors.As(err, &noTools):
+		return "tools_unsupported"
+	case errors.Is(err, store.ErrNotFound):
+		return "not_found"
+	}
+	return ""
 }
 
 // Emit はイベントを 1 件送る。

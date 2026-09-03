@@ -41,7 +41,7 @@
   }
   .box {
     width: min(26rem, calc(100vw - 3rem));
-    background: var(--surface);
+    background: var(--g2);
     border: 1px solid var(--border-strong);
     border-radius: 8px;
     padding: 16px 18px;
@@ -67,14 +67,15 @@
     gap: 7px;
     margin-top: 14px;
   }
+  /* 取り消せない操作。白い文字が 4.5:1 を満たす濃さまで落としてある。 */
   .danger {
-    background: var(--danger);
-    border-color: var(--danger);
+    background: var(--danger-solid);
+    border-color: var(--danger-solid);
     color: #fff;
   }
   .danger:hover {
-    background: var(--e11);
-    border-color: var(--e11);
-    color: var(--n1);
+    background: var(--danger-solid-hover);
+    border-color: var(--danger-solid-hover);
+    color: #fff;
   }
 </style>

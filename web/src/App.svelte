@@ -25,6 +25,9 @@
 
   let controller = null
 
+  // 会話が無いときに「誰が答えるか」を出すために使う。
+  const defaultAgent = $derived(agents.find((a) => a.id === status?.default_agent) ?? null)
+
   async function guard(fn) {
     try {
       return await fn()
@@ -84,7 +87,7 @@
 
     try {
       for await (const ev of api.send(currentId, text, controller.signal)) {
-        if (ev.type === 'error' && !ev.message_id) notice = { text: ev.error }
+        if (ev.type === 'error' && !ev.message_id) notice = { kind: ev.kind, text: ev.error }
         tx.apply(ev)
       }
     } catch (e) {
@@ -167,13 +170,26 @@
         onDismiss={() => (notice = null)}
       />
     {:else}
+      <!-- 何も無い画面は、案内文ではなく次の一手を出す。 -->
       <div class="blank">
-        <p class="title">Ivis</p>
-        <p>左の一覧から会話を選ぶか、新しい会話を始めてください。</p>
-        {#if status && !status.provider_ok}
+        <p class="lead">会話を始める</p>
+        {#if defaultAgent}
+          <p class="sub">
+            <span class="mono">{defaultAgent.name}</span> が
+            {#if defaultAgent.model}<span class="mono">{defaultAgent.model}</span> で{/if}答えます。
+            相手は後から変えられます。
+          </p>
+        {/if}
+        <button class="primary" onclick={() => newSession()} disabled={agents.length === 0}>
+          新しい会話
+        </button>
+        {#if agents.length === 0}
           <p class="warn">
-            Ollama に接続できていません。<br />
-            起動してから設定画面で接続先を確かめてください。
+            エージェントの定義が 1 つも読み込めていません。設定で探索パスを確かめてください。
+          </p>
+        {:else if status && !status.provider_ok}
+          <p class="warn">
+            Ollama に接続できていません。起動してから、設定で接続先を確かめてください。
           </p>
         {/if}
       </div>
@@ -208,8 +224,8 @@
   .app {
     display: grid;
     grid-template-columns: 240px minmax(0, 1fr);
-    transition: grid-template-columns var(--dur) var(--ease);
     grid-template-rows: minmax(0, 1fr);
+    transition: grid-template-columns var(--dur) var(--ease);
     height: 100%;
     overflow: hidden;
   }
@@ -223,22 +239,31 @@
     min-height: 0;
     height: 100%;
   }
+
   .blank {
     margin: auto;
+    display: grid;
+    justify-items: center;
+    gap: 10px;
+    max-width: 26rem;
+    padding: 0 1.5rem;
     text-align: center;
-    color: var(--fg-muted);
-    max-width: 30rem;
-    line-height: 1.9;
   }
-  .title {
-    color: var(--fg);
+  .lead {
+    margin: 0;
     font-size: 15px;
     font-weight: 600;
-    letter-spacing: 0.18em;
-    margin-bottom: 0.4rem;
+    color: var(--fg-bright);
+  }
+  .sub {
+    margin: 0;
+    color: var(--fg-muted);
+    line-height: 1.8;
   }
   .warn {
-    margin-top: 1.5rem;
+    margin: 6px 0 0;
     color: var(--danger-text);
+    font-size: 12px;
+    line-height: 1.8;
   }
 </style>

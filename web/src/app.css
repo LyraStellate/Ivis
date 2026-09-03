@@ -1,71 +1,88 @@
-/* 面と文字の色は、用途を固定した 12 段の並びとして持つ。
-   段の役割を固定しておくと、hover と選択とフォーカスが別々の段を使うことに
-   なり、同じ手段を奪い合わなくなる。 */
-:root {
-  /* 中間色 */
-  --n1: #0c0d10;  /* 画面の地 */
-  --n2: #131519;  /* 一段沈んだ面 */
-  --n3: #1a1d23;  /* 操作できる要素の通常 */
-  --n4: #21252d;  /* hover */
-  --n5: #292e38;  /* 押下中・選択 */
-  --n6: #333945;  /* 区切り線 */
-  --n7: #3f4653;  /* 操作できる要素の境界 */
-  --n8: #525b6b;  /* hover の境界 */
-  --n9: #6b7484;  /* 塗り */
-  --n10: #7b8595; /* 塗りの hover */
-  --n11: #9099a8; /* 補助の文字 */
-  --n12: #e4e7ec; /* 本文の文字 */
+@import './fonts.css';
 
-  /* アクセント */
-  --a3: #10243c;
-  --a4: #12304f;
-  --a5: #163b61;
-  --a6: #1d4b78;
-  --a7: #265f95;
-  --a8: #3277ba;
-  --a9: #3b82e0;
-  --a10: #4a8fea;
-  --a11: #8dbdff;
+/* 面と文字の色は、用途を固定した 13 段の並びとして持つ。段の役割を固定して
+   おくと、hover と選択とフォーカスが別々の段を使うことになり、同じ手段を
+   奪い合わなくなる。
+
+   段の並びは「地がいちばん暗い」ではない。会話の地 (段 3) を左パネル (段 2)
+   より明るく置き、面の順序そのもので主役の領域を示す。 */
+:root {
+  --g1: #17181c;  /* 沈めた面。コードブロック、設定の入力欄、スクロール軌道 */
+  --g2: #1e2025;  /* 左パネルの地 */
+  --g3: #25272d;  /* 会話の地 */
+  --g4: #2c2f36;  /* 持ち上げた面。入力欄の器、行の hover、ボタンの通常 */
+  --g5: #343841;  /* 押下中・選択 */
+  --g6: #3e434d;  /* 区切り線 */
+  --g7: #4b515d;  /* 操作できる要素の境界 */
+  --g8: #5e6673;  /* hover の境界 */
+  --g9: #767e8c;  /* 記号、無効 */
+  --g10: #8b93a1; /* 一覧の行の通常の文字 */
+  --g11: #a3abb8; /* 補助の文字 */
+  --g12: #e3e6ea; /* 本文。一覧の行の hover の文字 */
+  --g13: #f4f6f8; /* 見出し。選択されている行の文字 */
+
+  /* アクセント。塗りは明るい青白に暗い文字を置く。青いボタンを増やさない。 */
+  --accent-line: #6fb6ea;
+  --accent-solid: #cde6f7;
+  --accent-on: #141b23;
 
   /* 失敗 */
-  --e3: #2a1618;
-  --e6: #5b2b2f;
-  --e9: #d94a52;
-  --e11: #ff9ba0;
+  --e3: #382225;
+  --e6: #5e3237;
+  --e9: #e05561;
+  --e10: #cc4450;
+  --e12: #c33d49;
+  --e11: #ffa8ad;
 
-  /* 成功 */
-  --s9: #3f9d5a;
-  --s11: #7fd39a;
+  /* 接続の可否だけに使う。ツールの成功には使わない。 */
+  --ok: #5cb87a;
+
+  /* 話し手の色。エージェント ID から決める (lib/who.js)。色相環を機械的に
+     割らず、会話の地に対して明度をそろえた 8 色を持つ。どれも 7.9〜8.9:1。 */
+  --who-1: #8fcbf0;
+  --who-2: #86d3a6;
+  --who-3: #e7c173;
+  --who-4: #c0abf2;
+  --who-5: #7fd6cf;
+  --who-6: #f0a8b6;
+  --who-7: #edb48a;
+  --who-8: #a9b9f5;
 
   /* 用途名。面と、その上に乗る文字を対で持つ。面を差し替えたときに
      文字色の指定漏れが起きないようにするため。 */
-  --bg: var(--n1);
-  --surface: var(--n2);
-  --control: var(--n3);
-  --control-hover: var(--n4);
-  --control-active: var(--n5);
-  --border: var(--n6);
-  --border-strong: var(--n7);
-  --border-hover: var(--n8);
-  --ring: var(--a9);
-  --fg: var(--n12);
-  --fg-muted: var(--n11);
-  --accent: var(--a9);
-  --accent-hover: var(--a10);
-  --accent-fg: #ffffff;
-  --accent-text: var(--a11);
+  --bg: var(--g3);
+  --rail: var(--g2);
+  --sunken: var(--g1);
+  --raised: var(--g4);
+  --control: var(--g4);
+  --control-hover: var(--g5);
+  --control-active: var(--g6);
+  --border: var(--g6);
+  --border-strong: var(--g7);
+  --border-hover: var(--g8);
+  --ring: var(--accent-line);
+  --glyph: var(--g9);
+  --fg: var(--g12);
+  --fg-muted: var(--g11);
+  --fg-dim: var(--g10);
+  --fg-bright: var(--g13);
+  --accent: var(--accent-line);
   --danger: var(--e9);
   --danger-text: var(--e11);
   --danger-surface: var(--e3);
-  --ok: var(--s9);
+  --danger-border: var(--e6);
+  --danger-solid: var(--e12);
+  --danger-solid-hover: var(--e10);
 
-  --radius: 5px;
   --radius-sm: 3px;
+  --radius: 4px;
+  --radius-lg: 8px;
   --dur: 150ms;
   --ease: cubic-bezier(0.2, 0, 0, 1);
 
-  --font: "Segoe UI", system-ui, "Hiragino Sans", "Noto Sans JP", sans-serif;
-  --mono: "Cascadia Mono", ui-monospace, Consolas, "Liberation Mono", monospace;
+  --font: 'IBM Plex Sans', 'Segoe UI', system-ui, 'Yu Gothic UI', 'Hiragino Sans',
+    'Noto Sans JP', sans-serif;
+  --mono: 'IBM Plex Mono', 'Cascadia Mono', ui-monospace, Consolas, monospace;
 
   color-scheme: dark;
 }
@@ -83,16 +100,18 @@ body {
 
 /* 遷移させるのは色だけに限る。位置や大きさは動かさない。
    動く要素が多いほど、どこを見ればよいか分からなくなる。 */
-button, select, input, textarea, .row {
+button, select, input, textarea, a, summary, .row {
   transition:
     background-color var(--dur) var(--ease),
     border-color var(--dur) var(--ease),
-    color var(--dur) var(--ease),
-    box-shadow var(--dur) var(--ease);
+    color var(--dur) var(--ease);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  * { transition-duration: 0ms !important; }
+  *, *::before, *::after {
+    transition-duration: 0ms !important;
+    animation: none !important;
+  }
 }
 
 /* キーボードで到達したときだけリングを出す。マウスで押したときは出さない。
@@ -113,39 +132,63 @@ button {
   padding: 3px 9px;
   cursor: pointer;
 }
-button:hover:not(:disabled) { background: var(--control-hover); border-color: var(--border-hover); }
-button:active:not(:disabled) { background: var(--control-active); }
-button:disabled { color: var(--fg-muted); border-color: var(--border); cursor: default; }
-
-button.primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-fg);
+button:hover:not(:disabled) {
+  background: var(--control-hover);
+  border-color: var(--border-hover);
+  color: var(--fg-bright);
 }
-button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
-button.primary:disabled { background: var(--control); border-color: var(--border); color: var(--fg-muted); }
+button:active:not(:disabled) { background: var(--control-active); }
+button:disabled { color: var(--g9); border-color: var(--border); cursor: default; }
+
+/* 塗り。画面の中でいちばん明るいものが、いま決めるべきことになる。 */
+button.primary {
+  background: var(--accent-solid);
+  border-color: var(--accent-solid);
+  color: var(--accent-on);
+  font-weight: 500;
+}
+button.primary:hover:not(:disabled) {
+  background: #ffffff;
+  border-color: #ffffff;
+  color: var(--accent-on);
+}
+button.primary:active:not(:disabled) { background: #b6d8ef; border-color: #b6d8ef; }
+button.primary:disabled { background: var(--control); border-color: var(--border); color: var(--g9); }
 
 button.quiet {
   background: transparent;
   border-color: transparent;
   color: var(--fg-muted);
 }
-button.quiet:hover:not(:disabled) { background: var(--control-hover); color: var(--fg); border-color: transparent; }
+button.quiet:hover:not(:disabled) {
+  background: var(--control-hover);
+  color: var(--fg-bright);
+  border-color: transparent;
+}
 
 input, select, textarea {
   font: inherit;
   color: var(--fg);
-  background: var(--n2);
+  background: var(--sunken);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   padding: 4px 7px;
   width: 100%;
 }
 input:hover, select:hover, textarea:hover { border-color: var(--border-hover); }
+input::placeholder, textarea::placeholder { color: var(--g9); }
 
 code, pre, .mono { font-family: var(--mono); font-size: 12px; }
 
+/* 時刻や所要時間は桁をそろえる。並んだときに目が数字の位置で迷わない。 */
+.tnum { font-variant-numeric: tabular-nums; }
+
 ::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: var(--n5); border-radius: 6px; border: 2px solid var(--bg); }
-::-webkit-scrollbar-thumb:hover { background: var(--n6); }
+::-webkit-scrollbar-thumb {
+  background: var(--g5);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--g7); background-clip: padding-box; }
 ::-webkit-scrollbar-track { background: transparent; }

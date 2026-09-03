@@ -17,6 +17,14 @@ function statusOf(text) {
   return 'done'
 }
 
+// 画面だけが持つ項目に付ける識別子。時刻を使うと、同じミリ秒に 2 件届いた
+// ときに同じ値になり、描画が同一の項目と誤認して落ちる。
+let seq = 0
+function localId(prefix) {
+  seq += 1
+  return prefix + '-' + seq
+}
+
 function remove(list, item) {
   const i = list.indexOf(item)
   if (i >= 0) list.splice(i, 1)
@@ -141,7 +149,7 @@ export class Transcript {
   pushUser(text) {
     this.containers = [this.items]
     this.items.push({
-      id: 'sent-' + Date.now(),
+      id: localId('sent'),
       kind: 'user',
       status: 'done',
       text,
@@ -273,7 +281,7 @@ export class Transcript {
           it.status = 'error'
           break
         }
-        box.push({ id: 'notice-' + Date.now(), kind: 'notice', status: 'error', text: ev.error ?? '' })
+        box.push({ id: localId('notice'), kind: 'notice', status: 'error', text: ev.error ?? '' })
         break
       }
     }

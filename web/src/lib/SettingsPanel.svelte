@@ -182,7 +182,7 @@
     height: 100%;
     display: flex;
     flex-direction: column;
-    background: var(--surface);
+    background: var(--g2);
     border-left: 1px solid var(--border-strong);
     box-shadow: -12px 0 40px rgb(0 0 0 / 0.45);
   }

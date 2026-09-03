@@ -41,3 +41,33 @@ function rank(key) {
   const i = LEAD.indexOf(key)
   return i < 0 ? LEAD.length : i
 }
+
+/** 一覧をまとめるための区分。新しい順に並んでいることを前提にする。 */
+export const BUCKETS = ['今日', '昨日', '過去 7 日', 'それ以前']
+
+/**
+ * 更新日時を区分へ写す。日付の境界で分けるので、24 時間ではなく暦日で数える。
+ * 「昨日の 23:59」と「今日の 00:01」が同じ区分に入ると、日付で探せなくなる。
+ */
+export function bucket(iso, now = new Date()) {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return BUCKETS[3]
+  const day = (x) => Math.floor((x - x.getTimezoneOffset() * 60000) / 86400000)
+  const diff = day(now) - day(d)
+  if (diff <= 0) return BUCKETS[0]
+  if (diff === 1) return BUCKETS[1]
+  if (diff <= 7) return BUCKETS[2]
+  return BUCKETS[3]
+}
+
+/** 並びを区分ごとのまとまりへ分ける。空の区分は落とす。 */
+export function byBucket(sessions, now = new Date()) {
+  const out = []
+  for (const s of sessions ?? []) {
+    const label = bucket(s.updated_at, now)
+    const last = out[out.length - 1]
+    if (last && last.label === label) last.items.push(s)
+    else out.push({ label, items: [s] })
+  }
+  return out
+}
