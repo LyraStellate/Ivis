@@ -28,6 +28,18 @@ func (s *Server) staticHandler() http.Handler {
 			// 画面遷移は前面で処理するため、未知のパスは index.html を返す。
 			r = r.Clone(r.Context())
 			r.URL.Path = "/"
+			p = "index.html"
+		}
+
+		// 埋め込まれたファイルは更新時刻を持たないため、何も指定しないと
+		// 検証の手段が無いまま配信されることになる。作り直したのに古い画面が
+		// 出る、という状態を作らないよう、ここで明示する。
+		if strings.HasPrefix(p, "assets/") {
+			// 内容が変われば名前が変わるので、そのまま持っていてよい。
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			// 入口はどのファイルを読むかを指しているだけなので、毎回取り直す。
+			w.Header().Set("Cache-Control", "no-cache")
 		}
 		files.ServeHTTP(w, r)
 	})

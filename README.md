@@ -13,8 +13,14 @@ Ollama に接続して使う、軽量な AI チャット / エージェントフ
 
 ```
 cd web && npm install && npm run build && cd ..
-go build -o ivis ./cmd/ivis
+go build ./cmd/ivis
 ```
+
+`-o` は付けない。付けると Windows で拡張子の無いファイルができる。
+
+**起動したままだとバイナリを上書きできない。** 実行中の Ivis を止めてからビルドする。
+止めずに走らせると `The process cannot access the file` で失敗し、古いバイナリが
+そのまま残る。作り直したのに画面が変わらないときは、まずこれを疑う。
 
 ## 起動
 
