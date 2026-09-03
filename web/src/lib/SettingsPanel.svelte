@@ -3,6 +3,7 @@
   import { trapFocus } from './focus.js'
 
   // 設定は会話を差し替えない。重ねて開き、閉じると元の会話がそのまま残る。
+  // 画面の中央に浮かせる。右端は今後の右パネルのための場所として空けておく。
   let { agents, onClose } = $props()
 
   let cfg = $state(null)
@@ -172,19 +173,24 @@
   .veil {
     position: fixed;
     inset: 0;
-    background: rgb(0 0 0 / 0.45);
-    display: flex;
-    justify-content: flex-end;
+    background: rgb(0 0 0 / 0.5);
+    display: grid;
+    place-items: center;
+    padding: 24px;
     z-index: 10;
   }
   .sheet {
-    width: min(34rem, 100vw);
-    height: 100%;
+    width: min(46rem, 100%);
+    /* 高さを画面いっぱいにしない。上下に地が見えていないと、脇へ寄せた板に
+       見えて、閉じれば元へ戻るものだと伝わらない。 */
+    max-height: min(42rem, 100%);
     display: flex;
     flex-direction: column;
+    overflow: hidden;
     background: var(--g2);
-    border-left: 1px solid var(--border-strong);
-    box-shadow: -12px 0 40px rgb(0 0 0 / 0.45);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 18px 50px rgb(0 0 0 / 0.55);
   }
   header {
     display: flex;

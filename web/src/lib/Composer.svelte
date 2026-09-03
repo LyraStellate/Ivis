@@ -1,7 +1,7 @@
 <script>
   import { isSubmit } from './keys.js'
 
-  let { disabled = false, busy = false, onSend } = $props()
+  let { disabled = false, busy = false, onSend, onCancel } = $props()
 
   let draft = $state('')
   let area = $state(null)
@@ -17,8 +17,11 @@
   })
 
   function submit() {
+    // 生成中は送れない。ただし書いておくことはできる。返ってくるのを待つ間に
+    // 次の依頼をまとめられるようにするためで、書きかけは消さない。
+    if (disabled || busy) return
     const text = draft.trim()
-    if (!text || disabled) return
+    if (!text) return
     draft = ''
     onSend(text)
     area?.focus()
@@ -59,12 +62,35 @@
       onkeydown={onKeydown}
       rows="1"
       {disabled}
-      placeholder={busy ? '生成中。Esc で中断できます' : 'メッセージを入力'}
+      placeholder={busy ? '次のメッセージを書いておけます' : 'メッセージを入力'}
       aria-label="メッセージ"
     ></textarea>
     <div class="bar">
-      <span class="hint">Shift + Enter で改行</span>
-      <button class="primary" type="submit" disabled={disabled || !draft.trim()}>送信</button>
+      <span class="hint">
+        {busy ? '生成中は送信できません。Esc で中断' : 'Shift + Enter で改行'}
+      </span>
+
+      <!-- 始める操作と止める操作を同じ場所に置く。走っているものを止める
+           のだから、探す場所も同じであるべきである。 -->
+      <button
+        class="go"
+        class:stop={busy}
+        type="button"
+        onclick={busy ? onCancel : submit}
+        disabled={!busy && (disabled || !draft.trim())}
+        title={busy ? '生成を中断' : '送信'}
+        aria-label={busy ? '生成を中断' : '送信'}
+      >
+        {#if busy}
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+            <rect x="5" y="5" width="6" height="6" rx="1.5" fill="currentColor" />
+          </svg>
+        {:else}
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+            <path d="M6.2 4.2 L11.8 8 L6.2 11.8 Z" fill="currentColor" />
+          </svg>
+        {/if}
+      </button>
     </div>
   </div>
 </form>
@@ -83,7 +109,7 @@
     background: var(--raised);
     border: 1px solid transparent;
     border-radius: var(--radius-lg);
-    padding: 8px 10px 8px;
+    padding: 8px 8px 8px 10px;
   }
   .well:focus-within {
     border-color: var(--accent-line);
@@ -110,5 +136,42 @@
     font-size: 11px;
     color: var(--g9);
   }
-  .bar button { margin-left: auto; }
+
+  .go {
+    flex: none;
+    margin-left: auto;
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border-radius: 50%;
+    background: var(--accent-solid);
+    border-color: var(--accent-solid);
+    color: var(--accent-on);
+  }
+  .go:hover:not(:disabled) {
+    background: #ffffff;
+    border-color: #ffffff;
+    color: var(--accent-on);
+  }
+  .go:active:not(:disabled) { background: #b6d8ef; border-color: #b6d8ef; }
+  .go:disabled {
+    background: var(--control);
+    border-color: var(--border);
+    color: var(--g9);
+  }
+
+  /* 生成中。止める対象は「走っているもの」なので、進行中を表す色をそのまま
+     使う。ツールの行の実行中の印と同じ色である。 */
+  .go.stop {
+    background: var(--control);
+    border-color: var(--accent-line);
+    color: var(--accent-line);
+  }
+  .go.stop:hover {
+    background: var(--control-hover);
+    border-color: var(--border-hover);
+    color: var(--accent-line);
+  }
 </style>

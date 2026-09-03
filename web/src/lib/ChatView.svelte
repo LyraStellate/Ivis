@@ -71,10 +71,6 @@
     </select>
 
     {#if agent?.model}<span class="model mono">{agent.model}</span>{/if}
-
-    {#if busy}
-      <button onclick={onCancel}>中断 <kbd>Esc</kbd></button>
-    {/if}
   </div>
 </header>
 
@@ -112,7 +108,7 @@
   </div>
 {/if}
 
-<Composer disabled={busy || missingAgent} {busy} {onSend} />
+<Composer disabled={missingAgent} {busy} {onSend} {onCancel} />
 
 <style>
   header {
@@ -165,15 +161,6 @@
   }
   header select:hover { background: var(--g4); border-color: transparent; }
   .model { color: var(--fg-dim); }
-  kbd {
-    font: 11px var(--mono);
-    color: var(--fg-dim);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 0 3px;
-    margin-left: 3px;
-  }
-
   .banner,
   .notice {
     flex: none;

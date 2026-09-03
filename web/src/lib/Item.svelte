@@ -192,15 +192,20 @@
   summary::-webkit-details-marker { display: none; }
   summary:hover { background: var(--g4); color: var(--fg); }
 
-  /* 結末は色と形で示す。成功は目立たせない。記録のほとんどは成功なので、
-     そこに色を割いても読み取れる情報は増えない。 */
+  /* 結末は色と形で示す。塗りは走らせた結果 (成功・失敗・実行中)、中抜きは
+     走らずに終わったこと (拒否・中断) を表す。実行中から成功へは色が移る
+     ので、終わったことがその場で分かる。 */
   .dot {
     flex: none;
     width: 6px;
     height: 6px;
     border-radius: 2px;
     background: var(--glyph);
+    transition:
+      background-color var(--dur) var(--ease),
+      border-color var(--dur) var(--ease);
   }
+  .dot.done { background: var(--ok); }
   .dot.error { background: var(--danger); }
   .dot.running { background: var(--accent-line); }
   .dot.awaiting { background: transparent; border: 2px solid var(--accent-line); }

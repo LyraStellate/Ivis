@@ -80,9 +80,9 @@
   --dur: 150ms;
   --ease: cubic-bezier(0.2, 0, 0, 1);
 
-  --font: 'IBM Plex Sans', 'Segoe UI', system-ui, 'Yu Gothic UI', 'Hiragino Sans',
+  --font: 'Inter', 'Segoe UI', system-ui, 'Yu Gothic UI', 'Hiragino Sans',
     'Noto Sans JP', sans-serif;
-  --mono: 'IBM Plex Mono', 'Cascadia Mono', ui-monospace, Consolas, monospace;
+  --mono: 'JetBrains Mono', 'Cascadia Mono', ui-monospace, Consolas, monospace;
 
   color-scheme: dark;
 }
@@ -95,8 +95,11 @@ body {
   background: var(--bg);
   color: var(--fg);
   font: 13px/1.45 var(--font);
-  -webkit-font-smoothing: antialiased;
 }
+
+/* -webkit-font-smoothing: antialiased は指定しない。macOS では細く整うが、
+   Windows では副画素による描画を切ってしまい、暗い地の上の明るい文字が
+   痩せて縁が荒れる。既定の描画に任せる。 */
 
 /* 遷移させるのは色だけに限る。位置や大きさは動かさない。
    動く要素が多いほど、どこを見ればよいか分からなくなる。 */

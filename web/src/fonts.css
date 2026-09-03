@@ -1,38 +1,41 @@
 /* 欧文だけを同梱する。和文は字形を持たないので、この指定を通り越して
    OS のフォントへ落ちる。woff2 のみを指す。woff は同じ字形の重複であり、
-   これを読む環境はすべて woff2 を扱える。 */
+   これを読む環境はすべて woff2 を扱える。
+
+   13px で使うため、小さな寸法で崩れない書体を選ぶ。x ハイトが高く、
+   ヒンティングが効くものでないと、線が痩せて縁が荒れる。 */
 @font-face {
-  font-family: 'IBM Plex Sans';
+  font-family: 'Inter';
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-400-normal.woff2') format('woff2');
+  src: url('@fontsource/inter/files/inter-latin-400-normal.woff2') format('woff2');
 }
 @font-face {
-  font-family: 'IBM Plex Sans';
+  font-family: 'Inter';
   font-style: normal;
   font-weight: 500;
   font-display: swap;
-  src: url('@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-500-normal.woff2') format('woff2');
+  src: url('@fontsource/inter/files/inter-latin-500-normal.woff2') format('woff2');
 }
 @font-face {
-  font-family: 'IBM Plex Sans';
+  font-family: 'Inter';
   font-style: normal;
   font-weight: 600;
   font-display: swap;
-  src: url('@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-600-normal.woff2') format('woff2');
+  src: url('@fontsource/inter/files/inter-latin-600-normal.woff2') format('woff2');
 }
 @font-face {
-  font-family: 'IBM Plex Mono';
+  font-family: 'JetBrains Mono';
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-400-normal.woff2') format('woff2');
+  src: url('@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2') format('woff2');
 }
 @font-face {
-  font-family: 'IBM Plex Mono';
+  font-family: 'JetBrains Mono';
   font-style: normal;
   font-weight: 500;
   font-display: swap;
-  src: url('@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-500-normal.woff2') format('woff2');
+  src: url('@fontsource/jetbrains-mono/files/jetbrains-mono-latin-500-normal.woff2') format('woff2');
 }

@@ -122,6 +122,8 @@
   }
 
   function onKeydown(e) {
+    // 変換中の Esc は候補の取り消しであって、生成の中断ではない。
+    if (e.isComposing) return
     if (e.key === 'Escape') {
       if (settingsOpen) {
         settingsOpen = false
