@@ -48,6 +48,13 @@
     if (thinkLive && thinkBox) thinkBox.scrollTop = thinkBox.scrollHeight
   })
 
+  // 委譲した先の経過も、考えている間だけ開く。何が起きているか見えないまま
+  // 待たされるより、たどっている最中が見えるほうが待つ理由が分かる。
+  // 終わったら畳む。親が受け取った成果のほうが、そのときの読み手の関心である。
+  let openDg = $state(null)
+  const dgLive = $derived(item.status === 'running')
+  const showDg = $derived(openDg ?? dgLive)
+
   // 委譲の中は、渡した先を話し手として同じ規則で組み直す。
   const kids = $derived(item.children ?? [])
   const kidLeads = $derived(leads(kids))
@@ -135,18 +142,18 @@
 
     {:else if item.kind === 'delegate'}
       <!-- 委譲は、渡した先の色の縦線で子の会話を囲み、成果で左へ折り返す。
-           既定で開く。渡した先の仕事は経過ではなく中身なので、畳むと
-           何が起きたのかが読めなくなる。 -->
-      <div class="dg" style:--spine={whoColor(item.agentId, colorOf)}>
-        <details open>
-          <summary class="head">
-            <span class="dot {item.status}"></span>
-            <span class="tname" style:color={whoColor(item.agentId, colorOf)}>{item.agentId}</span>
-            <span class="to">へ委譲</span>
-            <span class="args">{item.task ?? ''}</span>
-            {#if item.ms}<span class="ms mono tnum">{duration(item.ms)}</span>{/if}
-          </summary>
+           経過は走っている間だけ開き、終わったら畳む。受け取った成果は
+           畳まない。親の会話にとってはそれが結果そのものだからである。 -->
+      <div class="dg" class:on={showDg} style:--spine={whoColor(item.agentId, colorOf)}>
+        <button class="head" onclick={() => (openDg = !showDg)} aria-expanded={showDg}>
+          <span class="dot {item.status}"></span>
+          <span class="tname" style:color={whoColor(item.agentId, colorOf)}>{item.agentId}</span>
+          <span class="to">へ委譲</span>
+          <span class="args">{item.task ?? ''}</span>
+          {#if item.ms}<span class="ms mono tnum">{duration(item.ms)}</span>{/if}
+        </button>
 
+        {#if showDg}
           <div class="children">
             {#each kids as child, i (child.id)}
               <Self
@@ -159,18 +166,19 @@
               />
             {/each}
           </div>
+        {/if}
 
-          {#if item.result}
-            <div class="back">
-              {#if repeats}
-                <span class="label">{item.agentId} の応答はここまで</span>
-              {:else}
-                <span class="label">受け取った成果</span>
-                <Markdown text={item.result} />
-              {/if}
-            </div>
-          {/if}
-        </details>
+        {#if item.result}
+          <div class="back">
+            {#if repeats && showDg}
+              <!-- 経過が見えているなら、同じ文章を続けて 2 度出さない。 -->
+              <span class="label">{item.agentId} の応答はここまで</span>
+            {:else}
+              <span class="label">受け取った成果</span>
+              <Markdown text={item.result} />
+            {/if}
+          </div>
+        {/if}
       </div>
     {/if}
   </div>
@@ -355,8 +363,18 @@
   /* 委譲。上下の折れは、2 辺の境界と 1 つの丸みを持つ擬似要素で描く。
      畳んでいるときは行き先が無いので折れを出さない。 */
   .dg { position: relative; }
-  .dg .head { padding-left: 19px; margin-left: 0; }
-  .dg details[open] > .head::before {
+  /* 委譲の見出しは、推論より強く出す。渡した先が誰かは会話の筋に関わるので、
+     畳んでいても読み飛ばせないようにする。 */
+  .dg .head {
+    width: 100%;
+    padding-left: 19px;
+    margin-left: 0;
+    background: none;
+    border: none;
+    text-align: left;
+  }
+  .dg .head:hover { background: var(--control); }
+  .dg.on > .head::before {
     content: '';
     position: absolute;
     left: 0;
@@ -369,6 +387,9 @@
   }
   .children { border-left: 2px solid var(--spine); padding-left: 11px; }
   .back { position: relative; padding-left: 13px; padding-top: 3px; }
+  /* 畳んでいるときは繋ぐ先の縦線が無い。折り返しの印だけが宙に浮くので出さない。 */
+  .dg:not(.on) .back { padding-left: 19px; }
+  .dg:not(.on) .back::before { display: none; }
   .back::before {
     content: '';
     position: absolute;
