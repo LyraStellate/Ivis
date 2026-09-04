@@ -17,7 +17,16 @@
   let items = $state([])
   const tx = new Transcript(items)
 
-  let busy = $state(false)
+  // 生成は会話に属する。画面全体を止めると、返事を待つ間ほかの会話を
+  // 開くこともできない。ツールが増えて 1 ターンが数分かかるようになった
+  // 以上、待っている間に別の会話を読めないのは通らない。
+  let runningId = $state(null)
+  const busy = $derived(runningId != null && runningId === currentId)
+
+  // 生成中の会話から離れたら、そのターンの続きは画面へ反映しない。戻って
+  // きた時点の履歴と、流れ続けるイベントが二重に積まれるのを避けるため。
+  // 生成そのものは走り続け、終わったところで履歴を取り直す。
+  let detached = false
   let notice = $state(null)
   let settingsOpen = $state(false)
   let pendingDelete = $state(null)
@@ -53,7 +62,9 @@
   }
 
   async function openSession(id) {
-    if (busy) return
+    if (id === currentId) return
+    // 生成中でも開ける。離れた会話の続きは、終わってから履歴として届く。
+    if (runningId != null && runningId !== id) detached = true
     currentId = id
     session = sessions.find((s) => s.id === id) ?? (await guard(() => api.getSession(id)))
     const history = await guard(() => api.listMessages(id))
@@ -70,6 +81,7 @@
   }
 
   async function removeSession(id) {
+    if (id === runningId) await cancel()
     await guard(() => api.deleteSession(id))
     sessions = sessions.filter((s) => s.id !== id)
     if (currentId === id) {
@@ -135,14 +147,18 @@
   }
 
   async function send(text) {
-    if (!currentId || busy) return
-    busy = true
+    if (!currentId || runningId != null) return
+    const sid = currentId
+    runningId = sid
+    detached = false
     notice = null
     tx.pushUser(text)
     controller = new AbortController()
 
     try {
-      for await (const ev of api.send(currentId, text, controller.signal)) {
+      for await (const ev of api.send(sid, text, controller.signal)) {
+        if (currentId !== sid) detached = true
+        if (detached) continue
         if (ev.type === 'error' && !ev.message_id) notice = { kind: ev.kind, text: ev.error }
         if (ev.type === 'usage') {
           usage = ev.context_limit ? { tokens: ev.prompt_tokens ?? 0, limit: ev.context_limit } : null
@@ -150,24 +166,34 @@
         tx.apply(ev)
       }
     } catch (e) {
-      if (e.name !== 'AbortError') notice = { kind: e.kind, text: e.message }
+      if (!detached && e.name !== 'AbortError') notice = { kind: e.kind, text: e.message }
     } finally {
-      busy = false
+      runningId = null
       controller = null
-      // 生成中のまま取り残された項目を閉じる。ここで全件を取り直さない。
-      tx.settle()
+      if (!detached) {
+        // 生成中のまま取り残された項目を閉じる。ここで全件を取り直さない。
+        tx.settle()
+      }
       // 一覧の表題と並びだけ更新する。
       const list = await guard(api.listSessions)
       if (list) {
         sessions = list
         session = list.find((s) => s.id === currentId) ?? session
       }
+      // 離れている間に進んだ分は画面に無い。戻っていれば取り直す。
+      if (detached && currentId === sid) {
+        const history = await guard(() => api.listMessages(sid))
+        tx.loadHistory(history ?? [])
+        usage = usageOf(session)
+      }
+      detached = false
     }
   }
 
   async function cancel() {
-    if (!currentId || !busy) return
-    await guard(() => api.cancelRun(currentId))
+    if (runningId == null) return
+    const sid = runningId
+    await guard(() => api.cancelRun(sid))
     controller?.abort()
   }
 
@@ -207,7 +233,7 @@
     {agents}
     {status}
     {currentId}
-    {busy}
+    {runningId}
     onOpen={openSession}
     onNew={newSession}
     onDelete={(s) => (pendingDelete = s)}

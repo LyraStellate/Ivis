@@ -1,8 +1,18 @@
 <script>
   import { byBucket } from './format.js'
 
-  let { sessions, agents, status, currentId, busy, onOpen, onNew, onDelete, onReload, onSettings } =
-    $props()
+  let {
+    sessions,
+    agents,
+    status,
+    currentId,
+    runningId,
+    onOpen,
+    onNew,
+    onDelete,
+    onReload,
+    onSettings,
+  } = $props()
 
   let listEl = $state(null)
 
@@ -43,14 +53,15 @@
       <p class="bucket">{g.label}</p>
       {#each g.items as s (s.id)}
         <div class="row" class:current={s.id === currentId}>
-          <button
-            class="open"
-            onclick={() => onOpen(s.id)}
-            onkeydown={onListKeydown}
-            disabled={busy && s.id !== currentId}
-          >
+          <!-- 生成中でも開ける。返事を待つ間ほかの会話を読めないほうが困る。
+               走っている会話には印を出し、どこが動いているかを示す。 -->
+          <button class="open" onclick={() => onOpen(s.id)} onkeydown={onListKeydown}>
             <span class="name">{s.title}</span>
-            <span class="agent">{agentName(s.agent_id)}</span>
+            {#if s.id === runningId}
+              <span class="run" title="生成中"><i></i><i></i><i></i></span>
+            {:else}
+              <span class="agent">{agentName(s.agent_id)}</span>
+            {/if}
           </button>
           <button class="del quiet" title="この会話を削除" onclick={() => onDelete(s)}>
             <svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true">
@@ -174,6 +185,28 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* 走っている会話の印。名前の代わりに置くのは、行の幅を奪わないため。
+     発言中の印 (Item.svelte) と同じ動きにして、同じ意味だと分かるようにする。 */
+  .run {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    flex: none;
+  }
+  .run i {
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: var(--fg-muted);
+    animation: blink 1.2s ease-in-out infinite;
+  }
+  .run i:nth-child(2) { animation-delay: 0.15s; }
+  .run i:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes blink {
+    0%, 60%, 100% { opacity: 0.25; }
+    30% { opacity: 1; }
+  }
+
   .agent {
     font-size: 11px;
     color: var(--g9);

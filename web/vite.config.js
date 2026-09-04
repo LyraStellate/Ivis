@@ -9,4 +9,7 @@ export default defineConfig({
   build: { outDir: 'dist', emptyOutDir: false },
   // 開発中は Vite の dev server から Go の API へ中継する。
   server: { proxy: { '/api': 'http://127.0.0.1:8317' } },
+  // 試験の中で画面を組み立てるには、Svelte のブラウザ向けの実装を解決させる
+  // 必要がある。既定ではサーバー向けが選ばれ、mount できない。
+  resolve: process.env.VITEST ? { conditions: ['browser'] } : undefined,
 })
