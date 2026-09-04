@@ -83,7 +83,7 @@ func (t *runSkillScriptTool) Execute(ctx context.Context, ec *ExecContext, args 
 	cmd.Dir = ec.Workspace
 	out, runErr := cmd.CombinedOutput()
 
-	result := truncate(strings.TrimSpace(string(out)), 32<<10)
+	result := truncate(strings.TrimSpace(decodeConsole(out)), 32<<10)
 	if ctx.Err() != nil {
 		return "", fmt.Errorf("スクリプトが %s を超えたため打ち切りました:\n%s", ec.ScriptTimeout, result)
 	}

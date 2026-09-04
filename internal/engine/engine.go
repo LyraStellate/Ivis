@@ -193,10 +193,14 @@ func numOption(v any) int {
 //
 // エージェントの一覧は定義群から毎回組み直す。派生ファイルとして持たせると、
 // 定義と一覧が食い違ったときにどちらが正か決められなくなる (#528664)。
-func systemPrompt(a *agent.Agent, skills []*skillreg.Skill, delegates []*agent.Agent, workspace string) string {
+func systemPrompt(a *agent.Agent, skills []*skillreg.Skill, delegates []*agent.Agent,
+	workspace string, now time.Time) string {
 	var b strings.Builder
 	b.WriteString(strings.TrimSpace(a.Instructions))
 	b.WriteString("\n\n")
+	// 時刻を載せておかないと、時間に関わる問いのたびにコマンドを打つことに
+	// なる。打ったところで、その出力が読めるとも限らない。
+	fmt.Fprintf(&b, "現在は %s です。\n", clock(now))
 	fmt.Fprintf(&b, "この会話の作業ディレクトリは %s です。\n", workspace)
 	// 境界とシェルは指示文に書く。書かないとモデルは相対と絶対を取り違え、
 	// 動かないコマンドを書く。
@@ -223,6 +227,13 @@ func systemPrompt(a *agent.Agent, skills []*skillreg.Skill, delegates []*agent.A
 		}
 	}
 	return b.String()
+}
+
+// clock は指示文に載せる時刻。曜日と時差まで書くのは、そこまで含めて
+// はじめて「いつか」が一意に決まるためである。
+func clock(t time.Time) string {
+	week := [...]string{"日", "月", "火", "水", "木", "金", "土"}
+	return t.Format("2006-01-02") + " (" + week[t.Weekday()] + ") " + t.Format("15:04 MST-07:00")
 }
 
 // describe は一覧に載せる説明。空のままにすると、モデルは名前だけで

@@ -73,7 +73,7 @@ func (e *Engine) Run(ctx context.Context, sessionID, userText string, emit Emit)
 // loop はツール呼び出しが無くなるまで生成を繰り返す。最後の本文を返す。
 func (e *Engine) loop(ctx context.Context, rc *runCtx) (string, error) {
 	sys := systemPrompt(rc.agent, e.Skills.Filter(rc.agent.Skills), e.delegateAgents(rc.agent),
-		e.Cfg.SessionWorkspace(rc.sessionID))
+		e.Cfg.SessionWorkspace(rc.sessionID), time.Now())
 	defs := e.Tools.Defs(rc.agent.Allows)
 
 	var last string

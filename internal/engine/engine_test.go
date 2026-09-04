@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/LyraStellate/Ivis/internal/provider"
 )
@@ -200,6 +201,33 @@ func TestSystemPromptHidesHigherTiers(t *testing.T) {
 	for _, name := range []string{"main", "peer"} {
 		if strings.Contains(sys, name+" (Tier") {
 			t.Errorf("呼べない相手 %q が指示文に載っています", name)
+		}
+	}
+}
+
+// 時刻を指示文に載せておかないと、時間に関わる問いのたびにコマンドを打つ
+// ことになる。打ったところで、その出力が読めるとも限らない。
+func TestSystemPromptStatesTime(t *testing.T) {
+	f := newFixture(t, func(n int, req provider.Request) []provider.Event {
+		return []provider.Event{text("ok"), {Type: provider.EventDone}}
+	})
+	id := f.newSession(t, "main")
+	if err := f.eng.Run(context.Background(), id, "今の時間は", f.emit); err != nil {
+		t.Fatal(err)
+	}
+	sys := f.mock.reqs[0].Messages[0].Content
+	if !strings.Contains(sys, time.Now().Format("2006-01-02")) {
+		t.Errorf("今日の日付が指示文にありません:\n%s", sys)
+	}
+}
+
+// 曜日と時差まで書いてはじめて「いつか」が一意に決まる。
+func TestClockFormat(t *testing.T) {
+	at := time.Date(2026, 9, 4, 23, 30, 0, 0, time.FixedZone("JST", 9*3600))
+	got := clock(at)
+	for _, want := range []string{"2026-09-04", "(金)", "23:30", "+09:00"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("clock() = %q, %q がありません", got, want)
 		}
 	}
 }

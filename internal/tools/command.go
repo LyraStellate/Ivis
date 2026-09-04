@@ -67,11 +67,13 @@ func (t *runCommandTool) Execute(ctx context.Context, ec *ExecContext, args map[
 
 	runErr := cmd.Run()
 
+	// 出力はその環境のコードページで書かれていることがある。文字列にする
+	// 前に読み直す。
 	var b strings.Builder
-	if s := strings.TrimRight(out.String(), "\n"); s != "" {
+	if s := strings.TrimRight(decodeConsole(out.Bytes()), "\n"); s != "" {
 		b.WriteString(truncate(s, maxCommandOutput))
 	}
-	if s := strings.TrimRight(errBuf.String(), "\n"); s != "" {
+	if s := strings.TrimRight(decodeConsole(errBuf.Bytes()), "\n"); s != "" {
 		if b.Len() > 0 {
 			b.WriteString("\n")
 		}
