@@ -21,6 +21,7 @@ type agentBody struct {
 	Skills       []string       `json:"skills"`
 	Memory       bool           `json:"memory"`
 	Thinking     bool           `json:"thinking"`
+	Unconfined   bool           `json:"unconfined"`
 	Color        string         `json:"color"`
 	Options      map[string]any `json:"options"`
 }
@@ -35,6 +36,7 @@ func (b *agentBody) into(a *agent.Agent) {
 	a.Skills = b.Skills
 	a.Memory = b.Memory
 	a.Thinking = b.Thinking
+	a.Unconfined = b.Unconfined
 	a.Color = b.Color
 	a.Options = b.Options
 	// 規定エージェントの Tier は変えられない。入口が 2 つある状態にも、

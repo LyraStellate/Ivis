@@ -8,6 +8,25 @@ import (
 	"strings"
 )
 
+// resolve は指定を実際のパスへ解決する。
+//
+// confined が false のエージェントは境界を課されない。絶対指定をそのまま
+// 受け取り、相対指定は会話の作業場所を基準に解く。判定の仕組みごと消さず
+// 通り抜ける形にするのは、課す側の安全を同じ経路で守り続けるためである。
+func resolve(root, rel string, confined bool) (string, error) {
+	if confined {
+		return resolveInRoot(root, rel)
+	}
+	rel = strings.TrimSpace(rel)
+	if rel == "" {
+		return "", fmt.Errorf("パスが空です")
+	}
+	if filepath.IsAbs(rel) {
+		return filepath.Clean(filepath.FromSlash(rel)), nil
+	}
+	return filepath.Clean(filepath.Join(root, filepath.FromSlash(rel))), nil
+}
+
 // resolveInRoot は root からの相対指定を実際のパスへ解決し、境界の外に出て
 // いないことを確かめる。
 //
@@ -79,9 +98,13 @@ func within(root, p string) bool {
 }
 
 // displayPath は root からの相対表記に戻す。利用者への提示に使う。
+//
+// 境界の外を指している場合は絶対表記のまま返す。".." を延々と辿る表記は、
+// どこを指しているのか読み手に伝わらない。
 func displayPath(root, abs string) string {
-	if rel, err := filepath.Rel(root, abs); err == nil {
-		return filepath.ToSlash(rel)
+	rel, err := filepath.Rel(root, abs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return filepath.ToSlash(abs)
 	}
-	return filepath.ToSlash(abs)
+	return filepath.ToSlash(rel)
 }

@@ -8,20 +8,30 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/LyraStellate/Ivis/internal/provider"
 	"github.com/LyraStellate/Ivis/internal/skillreg"
+	"github.com/LyraStellate/Ivis/internal/websearch"
 )
 
 // ExecContext はツール 1 回の実行に必要な文脈。
 type ExecContext struct {
-	// Workspace はファイル操作が越えてはならない境界。
+	// Workspace は相対指定の基準。境界を課す場合は、越えてはならない境界でもある。
 	Workspace string
+	// Confined が false のとき、境界を課さない。絶対指定も受け付け、
+	// コマンドも会話の外で走らせられる。何ができるかは定義に書かれている。
+	Confined bool
 	// Skills はスキルの参照先。
 	Skills *skillreg.Registry
 	// ScriptTimeout はスキル同梱スクリプトの実行時間の上限。
 	ScriptTimeout time.Duration
+	// CommandTimeout は run_command の実行時間の上限。用途が違えば妥当な
+	// 長さも違うので、スクリプトの上限とは別に持つ。
+	CommandTimeout time.Duration
+	// Search は検索の取得元。設定されていなければ検索は使えない。
+	Search websearch.Searcher
 	// AgentID は呼び出し元のエージェント。
 	AgentID string
 	// Delegate は委譲の実行。engine が注入する。
@@ -48,7 +58,7 @@ type Registry struct {
 	order []string
 }
 
-// NewRegistry は v1 の標準ツールを備えたレジストリを返す。
+// NewRegistry は標準のツールを備えたレジストリを返す。
 func NewRegistry() *Registry {
 	r := &Registry{tools: map[string]Tool{}}
 	r.Add(&listDirTool{})
@@ -57,6 +67,14 @@ func NewRegistry() *Registry {
 	r.Add(&loadSkillTool{})
 	r.Add(&runSkillScriptTool{})
 	r.Add(&delegateTool{})
+	r.Add(&findFilesTool{})
+	r.Add(&searchTextTool{})
+	r.Add(&editFileTool{})
+	r.Add(&moveFileTool{})
+	r.Add(&deleteFileTool{})
+	r.Add(&runCommandTool{})
+	r.Add(&webSearchTool{})
+	r.Add(&fetchURLTool{})
 	return r
 }
 
@@ -110,6 +128,38 @@ func argString(args map[string]any, key string) (string, error) {
 	default:
 		return fmt.Sprintf("%v", s), nil
 	}
+}
+
+// argInt は引数から整数を取り出す。JSON からは float64 で来る。
+func argInt(args map[string]any, key string) int {
+	switch v := args[key].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	}
+	return 0
+}
+
+// oneLine は改行を畳んで長さを切る。一覧に載せる要約に使う。
+func oneLine(s string, max int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > max {
+		return string(r[:max]) + "..."
+	}
+	return s
+}
+
+// argBool は引数から真偽値を取り出す。モデルは "true" のように文字列で
+// 返すことがあるため、そちらも受ける。
+func argBool(args map[string]any, key string) bool {
+	switch v := args[key].(type) {
+	case bool:
+		return v
+	case string:
+		return v == "true" || v == "True" || v == "1"
+	}
+	return false
 }
 
 func argStringOpt(args map[string]any, key string) string {

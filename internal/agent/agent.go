@@ -53,6 +53,10 @@ type Agent struct {
 	Memory bool `json:"memory"`
 	// Thinking はモデルの推論機能を使うか。対応しないモデルでは失敗する。
 	Thinking bool `json:"thinking"`
+	// Unconfined が真のとき、ファイル操作とコマンド実行が会話の作業場所の
+	// 外へ出られる。境界を丸ごと外さずここに持つのは、定義を読めば何が
+	// できるか分かる状態を保つためである。委譲しても継承しない。
+	Unconfined bool `json:"unconfined"`
 	// Color は話し手の色。空なら ID から機械的に決める。
 	Color string `json:"color,omitempty"`
 	// Options は生成パラメータ (temperature, num_ctx など) をそのまま Ollama へ渡す。
@@ -77,6 +81,7 @@ type doc struct {
 	Skills       []string       `json:"skills"`
 	Memory       bool           `json:"memory"`
 	Thinking     bool           `json:"thinking"`
+	Unconfined   bool           `json:"unconfined"`
 	Color        string         `json:"color,omitempty"`
 	Options      map[string]any `json:"options,omitempty"`
 }
@@ -232,6 +237,7 @@ func parse(path string) (*Agent, error) {
 		Skills:       d.Skills,
 		Memory:       d.Memory,
 		Thinking:     d.Thinking,
+		Unconfined:   d.Unconfined,
 		Color:        d.Color,
 		Options:      d.Options,
 		File:         path,

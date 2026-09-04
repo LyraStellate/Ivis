@@ -51,7 +51,11 @@
         max_iterations: cfg.max_iterations,
         max_delegation_depth: cfg.max_delegation_depth,
         script_timeout_sec: cfg.script_timeout_sec,
+        command_timeout_sec: cfg.command_timeout_sec,
         require_approval: cfg.require_approval,
+        auto_approve: cfg.auto_approve ?? [],
+        search_backend: cfg.search_backend,
+        search_api_key: cfg.search_api_key ?? '',
       })
       status = await api.getStatus()
       skills = await api.listSkills()
@@ -78,6 +82,26 @@
     if (!host) return false
     return !(host === '127.0.0.1' || host === 'localhost' || host === '::1')
   })
+
+  // 確認を求めるツールと、その既定。名前を手で書かせると、綴りを間違えた
+  // ときに黙って確認され続ける。
+  const guarded = $derived((status?.tools ?? []).filter((t) => t.approval))
+  const autoAll = $derived((cfg?.auto_approve ?? []).includes('*'))
+
+  function skips(name) {
+    return autoAll || (cfg?.auto_approve ?? []).includes(name)
+  }
+
+  function toggleSkip(name, on) {
+    const set = new Set((cfg.auto_approve ?? []).filter((n) => n !== '*'))
+    if (on) set.add(name)
+    else set.delete(name)
+    cfg.auto_approve = [...set]
+  }
+
+  function toggleSkipAll(on) {
+    cfg.auto_approve = on ? ['*'] : []
+  }
 
   const problems = $derived([
     ...(status?.agent_errors ?? []).map((e) => `エージェント ${e.path}: ${e.reason}`),
@@ -188,10 +212,30 @@
         </fieldset>
 
         <fieldset>
+          <legend>検索</legend>
+          <label>
+            取得元
+            <select bind:value={cfg.search_backend}>
+              {#each status?.search_backends ?? [] as b (b)}
+                <option value={b}>{b}</option>
+              {/each}
+            </select>
+          </label>
+          <label>
+            API キー
+            <input type="password" bind:value={cfg.search_api_key} placeholder="(不要な取得元では空のまま)" />
+          </label>
+          <p class="hint">
+            duckduckgo は鍵が要らない代わりに、先方の作りが変わると壊れます。壊れたら
+            鍵のある取得元へ移してください。
+          </p>
+        </fieldset>
+
+        <fieldset>
           <legend>実行</legend>
           <label class="check">
             <input type="checkbox" bind:checked={cfg.require_approval} />
-            <span>ファイルの書き込みとスクリプトの実行の前に確認する</span>
+            <span>確認を求めるツールの実行前に確認する</span>
           </label>
           <div class="nums">
             <label>1 ターンのツール呼び出し上限
@@ -200,7 +244,38 @@
               <input type="number" bind:value={cfg.max_delegation_depth} /></label>
             <label>スクリプトの実行時間の上限(秒)
               <input type="number" bind:value={cfg.script_timeout_sec} /></label>
+            <label>コマンドの実行時間の上限(秒)
+              <input type="number" bind:value={cfg.command_timeout_sec} /></label>
           </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>確認しないツール</legend>
+          <p class="hint">
+            ここで外したツールは、確認なしで実行されます。読み取りだけのツールは
+            もともと確認しません。
+          </p>
+          <label class="check">
+            <input type="checkbox" checked={autoAll}
+              onchange={(e) => toggleSkipAll(e.currentTarget.checked)} />
+            <span>すべて確認しない</span>
+          </label>
+          {#if !autoAll}
+            <div class="checks">
+              {#each guarded as t (t.name)}
+                <label class="check" title={t.description}>
+                  <input type="checkbox" checked={skips(t.name)}
+                    onchange={(e) => toggleSkip(t.name, e.currentTarget.checked)} />
+                  <span class="mono">{t.name}</span>
+                </label>
+              {/each}
+            </div>
+          {/if}
+          {#if autoAll}
+            <p class="err">
+              コマンドの実行もファイルの削除も、確認なしで走ります。取り消せません。
+            </p>
+          {/if}
         </fieldset>
 
         <fieldset>
@@ -316,6 +391,13 @@
   }
   .nav .count { color: var(--fg-muted); font-size: 11px; }
   .nav .chev { margin-left: auto; color: var(--g9); }
+
+  .checks {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+    gap: 2px 10px;
+    margin-top: 6px;
+  }
 
   .hint { color: var(--fg-muted); font-size: 12px; margin: 4px 0 0; }
   .err { color: var(--danger-text); font-size: 12px; margin: 4px 0 0; overflow-wrap: anywhere; }

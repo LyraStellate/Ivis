@@ -16,6 +16,7 @@ import (
 	"github.com/LyraStellate/Ivis/internal/skillreg"
 	"github.com/LyraStellate/Ivis/internal/store"
 	"github.com/LyraStellate/Ivis/internal/tools"
+	"github.com/LyraStellate/Ivis/internal/websearch"
 )
 
 // Server は API の実装。
@@ -72,8 +73,15 @@ func New(d Deps) *Server {
 		Tools:    d.Tools,
 		Provider: d.Prov,
 		Approver: s,
+		Search:   websearch.New(d.Config.SearchBackend, d.Config.SearchAPIKey),
 	}
 	return s
+}
+
+// refreshSearch は現在の設定で検索の取得元を作り直す。作り直さないと、
+// 設定画面で入れた鍵が次の起動まで効かない。
+func (s *Server) refreshSearch() {
+	s.eng.Search = websearch.New(s.cfg.SearchBackend, s.cfg.SearchAPIKey)
 }
 
 // refreshProvider は現在の設定で提供元を作り直す。

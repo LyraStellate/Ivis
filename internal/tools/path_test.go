@@ -103,3 +103,44 @@ func realRoot(t *testing.T, root string) string {
 	}
 	return r
 }
+
+// 境界を課さないエージェントは絶対指定を扱える。相対指定の基準は変わらない。
+func TestResolveUnconfined(t *testing.T) {
+	root := t.TempDir()
+	abs := filepath.Join(t.TempDir(), "outside.txt")
+
+	got, err := resolve(root, abs, false)
+	if err != nil {
+		t.Fatalf("絶対指定が断られました: %v", err)
+	}
+	if got != filepath.Clean(abs) {
+		t.Errorf("解決結果 = %q, want %q", got, abs)
+	}
+
+	rel, err := resolve(root, "sub/a.txt", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rel != filepath.Join(root, "sub", "a.txt") {
+		t.Errorf("相対指定の基準が変わっています: %q", rel)
+	}
+
+	// 上位参照も通る。何ができるかは定義に書かれている。
+	if _, err := resolve(root, "../elsewhere", false); err != nil {
+		t.Errorf("上位参照が断られました: %v", err)
+	}
+	if _, err := resolve(root, "", false); err == nil {
+		t.Error("空のパスが通ってしまいました")
+	}
+}
+
+// 境界を課す側の判定は、これまでどおり効き続ける。通り抜ける形にしたことで
+// 課す側の安全まで消えていないことを確かめる。
+func TestResolveConfinedStillGuards(t *testing.T) {
+	root := t.TempDir()
+	for _, bad := range []string{"../outside", "/etc/passwd", `\windows\system32`} {
+		if _, err := resolve(root, bad, true); err == nil {
+			t.Errorf("%q が通ってしまいました", bad)
+		}
+	}
+}

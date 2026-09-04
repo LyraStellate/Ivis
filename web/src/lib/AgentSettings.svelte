@@ -288,6 +288,16 @@
           <input type="checkbox" bind:checked={draft.thinking} />
           <span>モデルの推論を使う(対応するモデルのみ)</span>
         </label>
+        <label class="check">
+          <input type="checkbox" bind:checked={draft.unconfined} />
+          <span>会話の作業場所の外へ出てよい</span>
+        </label>
+        {#if draft.unconfined}
+          <p class="warn">
+            このエージェントは、この端末のどこでもファイルを読み書きし、そこでコマンドを
+            実行できます。委譲した先には引き継がれず、相手の設定がそのまま効きます。
+          </p>
+        {/if}
       </fieldset>
 
       <fieldset>
@@ -520,6 +530,12 @@
     font-size: 11px;
     margin: -4px 0 10px;
     line-height: 1.7;
+  }
+  .warn {
+    margin: 4px 0 0;
+    font-size: 11px;
+    line-height: 1.7;
+    color: var(--danger-text);
   }
   .err {
     color: var(--danger-text);

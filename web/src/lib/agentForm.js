@@ -20,6 +20,7 @@ export function blank(model = '') {
     skills: ['*'],
     memory: false,
     thinking: false,
+    unconfined: false,
     color: '',
     options: null,
   }
@@ -38,6 +39,7 @@ export function toForm(a) {
     skills: [...(a.skills ?? [])],
     memory: !!a.memory,
     thinking: !!a.thinking,
+    unconfined: !!a.unconfined,
     color: a.color ?? '',
     options: a.options ?? null,
   }
@@ -86,6 +88,7 @@ export function payload(form) {
     skills: form.skills ?? [],
     memory: !!form.memory,
     thinking: !!form.thinking,
+    unconfined: !!form.unconfined,
     color: form.color ?? '',
     options: form.options ?? null,
   }

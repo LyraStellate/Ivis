@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/LyraStellate/Ivis/internal/websearch"
 )
 
 // Config は Ivis 全体の設定。ファイル 1 つに収める。
@@ -38,8 +40,20 @@ type Config struct {
 	MaxDelegationDepth int `json:"max_delegation_depth"`
 	// ScriptTimeoutSec はスキル同梱スクリプトの実行時間の上限 (秒)。
 	ScriptTimeoutSec int `json:"script_timeout_sec"`
+	// CommandTimeoutSec は run_command の実行時間の上限 (秒)。用途が違えば
+	// 妥当な長さも違うので、スクリプトの上限とは別に持つ。
+	CommandTimeoutSec int `json:"command_timeout_sec"`
 	// RequireApproval が false のとき、承認を必要とするツールを確認なしで実行する。
 	RequireApproval bool `json:"require_approval"`
+	// AutoApprove に載せたツールは、既定で確認を求めるものであっても
+	// 確認せずに実行する。"*" ですべて。ツールが増えるほど確認の回数が
+	// 増え、自律駆動が成り立たなくなるため、線引きを利用者が引けるようにする。
+	AutoApprove []string `json:"auto_approve"`
+
+	// SearchBackend は Web 検索の取得元。既定は鍵の要らないもの。
+	SearchBackend string `json:"search_backend"`
+	// SearchAPIKey は鍵の要る取得元へ渡す鍵。
+	SearchAPIKey string `json:"search_api_key"`
 
 	// path は読み込み元。保存時に使う。設定ファイル自体には書き出さない。
 	path string `json:"-"`
@@ -67,6 +81,9 @@ func Default() *Config {
 		MaxIterations:      12,
 		MaxDelegationDepth: 3,
 		ScriptTimeoutSec:   120,
+		CommandTimeoutSec:  120,
+		AutoApprove:        []string{},
+		SearchBackend:      websearch.Backends[0],
 		RequireApproval:    true,
 	}
 }
@@ -192,6 +209,15 @@ func (c *Config) normalize() {
 	if c.ScriptTimeoutSec <= 0 {
 		c.ScriptTimeoutSec = d.ScriptTimeoutSec
 	}
+	if c.CommandTimeoutSec <= 0 {
+		c.CommandTimeoutSec = d.CommandTimeoutSec
+	}
+	if c.SearchBackend == "" {
+		c.SearchBackend = d.SearchBackend
+	}
+	if c.AutoApprove == nil {
+		c.AutoApprove = []string{}
+	}
 
 	c.AgentPaths = expandAll(c.AgentPaths)
 	c.SkillPaths = expandAll(c.SkillPaths)
@@ -235,4 +261,17 @@ func homeDir() string {
 		return h
 	}
 	return "."
+}
+
+// SkipsApproval はそのツールを確認なしで実行してよいかを返す。
+//
+// ツールが持つ既定を出発点に、設定の一覧が上書きする。判定をここ 1 か所に
+// 置くのは、ツールごとに散らすと、増やしたツールで上書きを忘れるためである。
+func (c *Config) SkipsApproval(tool string) bool {
+	for _, n := range c.AutoApprove {
+		if n == "*" || n == tool {
+			return true
+		}
+	}
+	return false
 }

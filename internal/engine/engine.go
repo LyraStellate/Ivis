@@ -19,6 +19,7 @@ import (
 	"github.com/LyraStellate/Ivis/internal/skillreg"
 	"github.com/LyraStellate/Ivis/internal/store"
 	"github.com/LyraStellate/Ivis/internal/tools"
+	"github.com/LyraStellate/Ivis/internal/websearch"
 )
 
 // ApprovalRequest は 1 件の承認要求。
@@ -133,6 +134,8 @@ type Engine struct {
 	Tools    *tools.Registry
 	Provider provider.Provider
 	Approver Approver
+	// Search は Web 検索の取得元。設定に応じて差し替わる。
+	Search websearch.Searcher
 
 	// ctxLen はモデルごとの文脈長。毎ターン提供元へ問い合わせるほど変わる
 	// ものではない。ゼロ値で使えるので初期化は要らない。
@@ -194,7 +197,16 @@ func systemPrompt(a *agent.Agent, skills []*skillreg.Skill, delegates []*agent.A
 	var b strings.Builder
 	b.WriteString(strings.TrimSpace(a.Instructions))
 	b.WriteString("\n\n")
-	fmt.Fprintf(&b, "この会話の作業ディレクトリは %s です。ファイル操作はこの中に限られます。\n", workspace)
+	fmt.Fprintf(&b, "この会話の作業ディレクトリは %s です。\n", workspace)
+	// 境界とシェルは指示文に書く。書かないとモデルは相対と絶対を取り違え、
+	// 動かないコマンドを書く。
+	if a.Unconfined {
+		b.WriteString("パスは絶対指定もでき、この外のファイルも読み書きできます。\n")
+		b.WriteString("相対指定はこのディレクトリが基準です。\n")
+	} else {
+		b.WriteString("ファイル操作はこの中に限られます。パスはここからの相対で指定します。\n")
+	}
+	fmt.Fprintf(&b, "コマンドは %s 越しに実行されます。\n", tools.ShellName())
 
 	if len(skills) > 0 {
 		b.WriteString("\n利用できるスキル (必要になったら load_skill で本文を読むこと):\n")

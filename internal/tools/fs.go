@@ -33,7 +33,7 @@ func (t *listDirTool) Execute(ctx context.Context, ec *ExecContext, args map[str
 	if rel == "" {
 		rel = "."
 	}
-	abs, err := resolveInRoot(ec.Workspace, rel)
+	abs, err := resolve(ec.Workspace, rel, ec.Confined)
 	if err != nil {
 		return "", err
 	}
@@ -81,7 +81,7 @@ func (t *readFileTool) Execute(ctx context.Context, ec *ExecContext, args map[st
 	if err != nil {
 		return "", err
 	}
-	abs, err := resolveInRoot(ec.Workspace, rel)
+	abs, err := resolve(ec.Workspace, rel, ec.Confined)
 	if err != nil {
 		return "", err
 	}
@@ -120,7 +120,7 @@ func (t *writeFileTool) Execute(ctx context.Context, ec *ExecContext, args map[s
 	if len(content) > maxWriteBytes {
 		return "", fmt.Errorf("書き込む内容が大きすぎます (%d バイト)", len(content))
 	}
-	abs, err := resolveInRoot(ec.Workspace, rel)
+	abs, err := resolve(ec.Workspace, rel, ec.Confined)
 	if err != nil {
 		return "", err
 	}

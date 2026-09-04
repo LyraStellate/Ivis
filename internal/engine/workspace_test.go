@@ -9,6 +9,7 @@ import (
 
 	"github.com/LyraStellate/Ivis/internal/config"
 	"github.com/LyraStellate/Ivis/internal/provider"
+	"github.com/LyraStellate/Ivis/internal/tools"
 )
 
 // 会話ごとに作業場所が分かれる。同じ名前で書いても互いを上書きしない。
@@ -140,5 +141,73 @@ func TestContextUsageIgnoresChildren(t *testing.T) {
 	sess, _ := f.store.GetSession(context.Background(), id)
 	if sess.ContextTokens != 500 {
 		t.Errorf("使用量 = %d, want 500 (子の分を数えない)", sess.ContextTokens)
+	}
+}
+
+// 境界を課さないエージェントは、会話の作業場所の外も読み書きできる。
+// 課すエージェントは同じ指定を断る。
+func TestUnconfinedAgentReachesOutside(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+
+	write := func(agentID string) string {
+		f := newFixture(t, func(n int, req provider.Request) []provider.Event {
+			if n == 0 {
+				return []provider.Event{callTool("write_file", map[string]any{
+					"path": outside, "content": "外です",
+				})}
+			}
+			return []provider.Event{text("終わり"), {Type: provider.EventDone}}
+		})
+		if agentID == "free" {
+			ag, _ := f.eng.Agents.Get("main")
+			ag.Unconfined = true
+		}
+		id := f.newSession(t, "main")
+		if err := f.eng.Run(context.Background(), id, "書いて", f.emit); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		msgs, _ := f.store.ListMessages(context.Background(), id)
+		var result string
+		for _, m := range msgs {
+			if m.Role == provider.RoleTool {
+				result = m.Content
+			}
+		}
+		return result
+	}
+
+	// 断り方は指定の形で変わる (絶対指定なら「相対で」、上位参照なら「外へは」)。
+	// ここで見たいのは断られたことなので、失敗として返ったかだけを確かめる。
+	if got := write("main"); !strings.Contains(got, "エラー") {
+		t.Errorf("境界が効いていません: %q", got)
+	}
+	if _, err := os.Stat(outside); err == nil {
+		t.Fatal("断ったのに書かれています")
+	}
+
+	if got := write("free"); strings.Contains(got, "エラー") {
+		t.Errorf("境界を課さないのに断られました: %q", got)
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Error("境界を課さないのに書かれていません")
+	}
+}
+
+// 指示文には、境界の有無と使われるシェルを書く。書かないとモデルは相対と
+// 絶対を取り違え、動かないコマンドを書く。
+func TestSystemPromptStatesBoundaryAndShell(t *testing.T) {
+	f := newFixture(t, func(n int, req provider.Request) []provider.Event {
+		return []provider.Event{text("ok"), {Type: provider.EventDone}}
+	})
+	id := f.newSession(t, "main")
+	if err := f.eng.Run(context.Background(), id, "やあ", f.emit); err != nil {
+		t.Fatal(err)
+	}
+	sys := f.mock.reqs[0].Messages[0].Content
+	if !strings.Contains(sys, "この中に限られます") {
+		t.Error("境界のことが書かれていません")
+	}
+	if !strings.Contains(sys, tools.ShellName()) {
+		t.Error("シェルのことが書かれていません")
 	}
 }

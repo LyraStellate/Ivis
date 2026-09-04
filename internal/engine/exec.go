@@ -62,7 +62,10 @@ func (e *Engine) runOneTool(ctx context.Context, rc *runCtx, callID string, call
 		return "", fmt.Errorf("エージェント %q にツール %q の使用は許可されていません", rc.agent.ID, call.Name)
 	}
 
-	if tool.NeedsApproval() && e.Cfg.RequireApproval && e.Approver != nil {
+	// 確認を求めるかは、ツールの既定を設定が上書きする。判定をここ 1 か所に
+	// 置くのは、ツールごとに散らすと増やしたツールで上書きを忘れるため。
+	needsApproval := tool.NeedsApproval() && !e.Cfg.SkipsApproval(call.Name)
+	if needsApproval && e.Cfg.RequireApproval && e.Approver != nil {
 		req := ApprovalRequest{
 			ID:         store.NewID(),
 			SessionID:  rc.sessionID,
@@ -88,11 +91,15 @@ func (e *Engine) runOneTool(ctx context.Context, rc *runCtx, callID string, call
 	ec := &tools.ExecContext{
 		// 作業場所は会話ごとに分ける。委譲された子も同じ場所を使う。子は親の
 		// 依頼の一部を担うのであり、成果物の置き場を分ける理由がない。
-		Workspace:     e.Cfg.SessionWorkspace(rc.sessionID),
-		Skills:        e.Skills,
-		ScriptTimeout: time.Duration(e.Cfg.ScriptTimeoutSec) * time.Second,
-		AgentID:       rc.agent.ID,
-		CheckDelegate: func(id string) error { return e.checkDelegate(rc.agent, id) },
+		Workspace: e.Cfg.SessionWorkspace(rc.sessionID),
+		// 境界を課すかはエージェントの属性。委譲しても継承しない。
+		Confined:       !rc.agent.Unconfined,
+		CommandTimeout: time.Duration(e.Cfg.CommandTimeoutSec) * time.Second,
+		Search:         e.Search,
+		Skills:         e.Skills,
+		ScriptTimeout:  time.Duration(e.Cfg.ScriptTimeoutSec) * time.Second,
+		AgentID:        rc.agent.ID,
+		CheckDelegate:  func(id string) error { return e.checkDelegate(rc.agent, id) },
 		Delegate: func(ctx context.Context, agentID, task string) (string, error) {
 			// 呼び出しの識別子を渡し、委譲の開始と終了もその呼び出しに
 			// 結び付けられるようにする。

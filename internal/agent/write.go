@@ -136,6 +136,7 @@ func (a *Agent) toDoc() doc {
 		Skills:       nonNil(a.Skills),
 		Memory:       a.Memory,
 		Thinking:     a.Thinking,
+		Unconfined:   a.Unconfined,
 		Color:        a.Color,
 		Options:      a.Options,
 	}
