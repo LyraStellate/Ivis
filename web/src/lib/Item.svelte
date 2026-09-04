@@ -11,6 +11,7 @@
     onApprove,
     onRewind = null,
     colorOf = null,
+    fold = false,
     lead = true,
     owner = null,
     nested = false,
@@ -40,6 +41,13 @@
   // 利用者が自分で開閉したら、その意思を以後優先する。
   const showThink = $derived(openThink ?? thinkLive)
 
+  // 委譲した先の最終回答は、書いている間だけ開く。書き終われば、その内容は
+  // 親が受け取った成果として次に現れるので、同じ文章が続けて 2 度並ぶ。
+  // 畳むのは本文だけで、誰の発言かは畳んでも色と名前で残る。
+  let openAnswer = $state(null)
+  const answerLive = $derived(item.status === 'streaming')
+  const showAnswer = $derived(!fold || (openAnswer ?? answerLive))
+
   // 考えている間は末尾を見せ続ける。上端で止まっていると、伸びているのに
   // 何も動いていないように見える。
   let thinkBox = $state(null)
@@ -48,17 +56,16 @@
     if (thinkLive && thinkBox) thinkBox.scrollTop = thinkBox.scrollHeight
   })
 
-  // 委譲した先の経過も、考えている間だけ開く。何が起きているか見えないまま
-  // 待たされるより、たどっている最中が見えるほうが待つ理由が分かる。
-  // 終わったら畳む。親が受け取った成果のほうが、そのときの読み手の関心である。
-  let openDg = $state(null)
-  const dgLive = $derived(item.status === 'running')
-  const showDg = $derived(openDg ?? dgLive)
-
   // 委譲の中は、渡した先を話し手として同じ規則で組み直す。
   const kids = $derived(item.children ?? [])
   const kidLeads = $derived(leads(kids))
   const kidOwners = $derived(owners(kids))
+
+  // 親へ返るのは子の最後の発言である。そこだけを畳む対象にする。
+  const answerAt = $derived.by(() => {
+    for (let i = kids.length - 1; i >= 0; i--) if (kids[i].kind === 'agent') return i
+    return -1
+  })
 
   // 受け取った成果は、多くの場合そのまま子の最後の発言である。両方を出すと
   // 同じ文章が続けて 2 度並ぶので、違うときだけ本文を出す。
@@ -103,7 +110,22 @@
             {/if}
           </div>
         {/if}
-        <Markdown text={item.text} />
+        {#if fold}
+          <!-- 開いたあとも切り替えは残す。畳めなくなると、2 度並んだ文章を
+               片付ける手立てが無くなる。 -->
+          <div class="answer" class:on={showAnswer}>
+            <button
+              class="peek"
+              onclick={() => (openAnswer = !showAnswer)}
+              aria-expanded={showAnswer}
+            >
+              {answerLive ? '回答しています' : '回答'}
+            </button>
+            {#if showAnswer}<Markdown text={item.text} />{/if}
+          </div>
+        {:else}
+          <Markdown text={item.text} />
+        {/if}
         {#if item.error}<p class="failed">{item.error}</p>{/if}
       </div>
 
@@ -144,16 +166,16 @@
       <!-- 委譲は、渡した先の色の縦線で子の会話を囲み、成果で左へ折り返す。
            経過は走っている間だけ開き、終わったら畳む。受け取った成果は
            畳まない。親の会話にとってはそれが結果そのものだからである。 -->
-      <div class="dg" class:on={showDg} style:--spine={whoColor(item.agentId, colorOf)}>
-        <button class="head" onclick={() => (openDg = !showDg)} aria-expanded={showDg}>
-          <span class="dot {item.status}"></span>
-          <span class="tname" style:color={whoColor(item.agentId, colorOf)}>{item.agentId}</span>
-          <span class="to">へ委譲</span>
-          <span class="args">{item.task ?? ''}</span>
-          {#if item.ms}<span class="ms mono tnum">{duration(item.ms)}</span>{/if}
-        </button>
+      <div class="dg" style:--spine={whoColor(item.agentId, colorOf)}>
+        <details open>
+          <summary class="head">
+            <span class="dot {item.status}"></span>
+            <span class="tname" style:color={whoColor(item.agentId, colorOf)}>{item.agentId}</span>
+            <span class="to">へ委譲</span>
+            <span class="args">{item.task ?? ''}</span>
+            {#if item.ms}<span class="ms mono tnum">{duration(item.ms)}</span>{/if}
+          </summary>
 
-        {#if showDg}
           <div class="children">
             {#each kids as child, i (child.id)}
               <Self
@@ -162,23 +184,27 @@
                 {colorOf}
                 lead={kidLeads[i]}
                 owner={kidOwners[i]}
+                fold={i === answerAt}
                 nested
               />
             {/each}
           </div>
-        {/if}
 
-        {#if item.result}
-          <div class="back">
-            {#if repeats && showDg}
-              <!-- 経過が見えているなら、同じ文章を続けて 2 度出さない。 -->
-              <span class="label">{item.agentId} の応答はここまで</span>
-            {:else}
-              <span class="label">受け取った成果</span>
-              <Markdown text={item.result} />
-            {/if}
-          </div>
-        {/if}
+          {#if item.result}
+            <!-- 受け取った成果は渡した先の言葉である。呼び出し元の色で出すと、
+                 親が言ったように読める。名札を渡した先の色で添える。 -->
+            <div class="back">
+              <span class="label" style:color={whoColor(item.agentId, colorOf)}>
+                {item.agentId} の回答
+              </span>
+              {#if repeats}
+                <span class="same">上と同じ内容です</span>
+              {:else}
+                <Markdown text={item.result} />
+              {/if}
+            </div>
+          {/if}
+        </details>
       </div>
     {/if}
   </div>
@@ -220,7 +246,12 @@
     content: "▸  ";
     color: var(--g9);
   }
-  .think.on .peek::before { content: "▾  "; }
+  .think.on .peek::before,
+  .answer.on .peek::before { content: "▾  "; }
+
+  /* 回答は畳めるだけで、開いているときは本文としてそのまま読ませる。
+     推論のように地へ沈めない。 */
+  .answer { margin: 0; }
   .think pre {
     margin: 4px 0 0;
     padding: 8px 10px;
@@ -363,18 +394,8 @@
   /* 委譲。上下の折れは、2 辺の境界と 1 つの丸みを持つ擬似要素で描く。
      畳んでいるときは行き先が無いので折れを出さない。 */
   .dg { position: relative; }
-  /* 委譲の見出しは、推論より強く出す。渡した先が誰かは会話の筋に関わるので、
-     畳んでいても読み飛ばせないようにする。 */
-  .dg .head {
-    width: 100%;
-    padding-left: 19px;
-    margin-left: 0;
-    background: none;
-    border: none;
-    text-align: left;
-  }
-  .dg .head:hover { background: var(--control); }
-  .dg.on > .head::before {
+  .dg .head { padding-left: 19px; margin-left: 0; }
+  .dg details[open] > .head::before {
     content: '';
     position: absolute;
     left: 0;
@@ -387,9 +408,6 @@
   }
   .children { border-left: 2px solid var(--spine); padding-left: 11px; }
   .back { position: relative; padding-left: 13px; padding-top: 3px; }
-  /* 畳んでいるときは繋ぐ先の縦線が無い。折り返しの印だけが宙に浮くので出さない。 */
-  .dg:not(.on) .back { padding-left: 19px; }
-  .dg:not(.on) .back::before { display: none; }
   .back::before {
     content: '';
     position: absolute;
@@ -404,7 +422,10 @@
   .back .label {
     display: block;
     font-size: 11px;
-    color: var(--fg-muted);
     margin-bottom: 2px;
+  }
+  .back .same {
+    font-size: 11px;
+    color: var(--fg-dim);
   }
 </style>

@@ -20,17 +20,33 @@ export function isAtBottom(el) {
 export function stickToBottom(node, options = {}) {
   let opts = options
   let pinned = true
+  // 直前に見ていた位置。追従をやめるかどうかは、末尾からの距離ではなく
+  // 「上へ動いたか」で決める。中身が伸びた瞬間は末尾から離れるが、それは
+  // 利用者が遡ったわけではない。距離だけで判断すると、生成が速いほど
+  // 勝手に追従が外れる。委譲の中でツールの行が次々に増えるときに顕著だった。
+  let lastTop = node.scrollTop
 
   const content = node.firstElementChild
   const follow = () => {
-    if (pinned) scrollToBottom(node)
+    if (!pinned) return
+    scrollToBottom(node)
+    lastTop = node.scrollTop
   }
 
   const onScroll = () => {
-    const now = isAtBottom(node)
-    if (now !== pinned) {
-      pinned = now
-      opts.onPinned?.(pinned)
+    const top = node.scrollTop
+    const wentUp = top < lastTop - 2
+    lastTop = top
+
+    if (pinned && wentUp && !isAtBottom(node)) {
+      pinned = false
+      opts.onPinned?.(false)
+      return
+    }
+    // 末尾へ戻ってきたら追従を再開する。
+    if (!pinned && isAtBottom(node)) {
+      pinned = true
+      opts.onPinned?.(true)
     }
   }
 
@@ -41,6 +57,7 @@ export function stickToBottom(node, options = {}) {
 
   node.addEventListener('scroll', onScroll, { passive: true })
   scrollToBottom(node)
+  lastTop = node.scrollTop
 
   return {
     update(next) {
