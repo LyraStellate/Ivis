@@ -164,8 +164,8 @@
 
     {:else if item.kind === 'delegate'}
       <!-- 委譲は、渡した先の色の縦線で子の会話を囲み、成果で左へ折り返す。
-           経過は走っている間だけ開き、終わったら畳む。受け取った成果は
-           畳まない。親の会話にとってはそれが結果そのものだからである。 -->
+           経過は畳まない。渡した先の仕事は経過ではなく中身だからである。
+           畳むのは最後の発言だけで、それは受け取った成果として続くため。 -->
       <div class="dg" style:--spine={whoColor(item.agentId, colorOf)}>
         <details open>
           <summary class="head">
