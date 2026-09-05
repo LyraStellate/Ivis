@@ -19,13 +19,15 @@ type runCommandTool struct{}
 
 func (t *runCommandTool) Name() string { return "run_command" }
 func (t *runCommandTool) Description() string {
-	return "コマンドを実行し、出力と終了コードを返す。ビルド・試験・git など、" +
-		"手元の道具を使う仕事はこれで行う。対話を求めるコマンドは応答できないので使わないこと。"
+	return "コマンドを実行し、終わるまで待って出力と終了コードを返す。ビルド・試験・git など、" +
+		"手元の道具を使う仕事はこれで行う。問われる内容が先に分かっているなら stdin に答えを書ける。" +
+		"出力を見てから答える必要があるもの、終わらないものは start_process を使う。"
 }
 func (t *runCommandTool) Parameters() map[string]any {
 	return schema(map[string]any{
 		"command": strProp("実行するコマンド。シェル越しに走るので、パイプやリダイレクトも書ける。"),
 		"cwd":     strProp("実行する場所。省略すると作業ディレクトリ。"),
+		"stdin":   strProp("標準入力へ流す文字列。問いが複数あるなら改行で区切って並べる。省略すると何も与えない。"),
 	}, "command")
 }
 
@@ -56,7 +58,12 @@ func (t *runCommandTool) Execute(ctx context.Context, ec *ExecContext, args map[
 
 	name, flag := shell()
 	cmd := exec.CommandContext(ctx, name, flag, line)
+	setShellLine(cmd, line)
 	cmd.Dir = dir
+	// 標準入力は必ず与える。何も繋がないと、入力を求めるコマンドが読める
+	// ものを持たないまま止まるか、読めないまま失敗する。空でも「これ以上
+	// 無い」と伝わる形にしておく。
+	cmd.Stdin = strings.NewReader(argStringOpt(args, "stdin"))
 	var out, errBuf bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errBuf

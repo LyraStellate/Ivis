@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -18,7 +19,7 @@ func sleepCmd(sec int) string {
 	return "sleep " + itoa(sec)
 }
 
-func itoa(n int) string { return string(rune('0' + n)) }
+func itoa(n int) string { return strconv.Itoa(n) }
 
 func TestRunCommandReturnsOutput(t *testing.T) {
 	ec := newCtx(t)
@@ -96,5 +97,48 @@ func TestRunCommandRespectsBoundary(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("境界の外で実行できてしまいました")
+	}
+}
+
+// 引用符を含むコマンドが、書いたとおりに届くこと。
+//
+// os/exec は Windows で引数ごとに引用符を足して命令行を組み立てるが、cmd は
+// その組み立て方に従わない。素通しにすると git commit -m "..." のような、
+// 最もよく書かれる形が壊れた記号ごと相手に渡る。
+func TestRunCommandKeepsQuotes(t *testing.T) {
+	ec := newCtx(t)
+	out, err := (&runCommandTool{}).Execute(context.Background(), ec, map[string]any{
+		"command": `echo "a b"`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, `\"`) {
+		t.Errorf("引用符が壊れている: %q", out)
+	}
+	if !strings.Contains(out, "a b") {
+		t.Errorf("出力 = %q", out)
+	}
+}
+
+// 対話を求めるコマンドへ、先に答えを渡せること。
+//
+// 何も繋がないと、入力を求めるものは読めるものを持たないまま失敗する。
+// Windows の date のような、対話を意図していない組み込みコマンドでも同じ
+// ことが起きる。
+func TestRunCommandFeedsStdin(t *testing.T) {
+	ec := newCtx(t)
+	out, err := (&runCommandTool{}).Execute(context.Background(), ec, map[string]any{
+		"command": "sort",
+		"stdin":   "beta\nalpha\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "alpha") || !strings.Contains(out, "beta") {
+		t.Fatalf("標準入力が届いていない: %q", out)
+	}
+	if strings.Index(out, "alpha") > strings.Index(out, "beta") {
+		t.Errorf("並べ替えられていない: %q", out)
 	}
 }
