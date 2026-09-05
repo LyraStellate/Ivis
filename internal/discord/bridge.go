@@ -44,6 +44,8 @@ type Bridge struct {
 	// asker は会話ごとの、いま依頼した人。承認を押せる相手を絞るのに使う。
 	asker map[string]string
 	waits map[string]*pending
+	// answers は答えを待っている問い。会話ごとに高々 1 つ。
+	answers map[string]*asking
 
 	conn      *conn
 	connected bool
@@ -60,10 +62,11 @@ func New(d Deps) *Bridge {
 		d.Log = func(string, ...any) {}
 	}
 	return &Bridge{
-		deps:   d,
-		active: map[string]*run{},
-		asker:  map[string]string{},
-		waits:  map[string]*pending{},
+		deps:    d,
+		active:  map[string]*run{},
+		asker:   map[string]string{},
+		waits:   map[string]*pending{},
+		answers: map[string]*asking{},
 	}
 }
 
@@ -102,6 +105,11 @@ func (b *Bridge) serve(ctx context.Context, api API, in incoming) {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	if !b.deps.Runs.Begin(sess.ID, cancel) {
+		// 走っているターンが問いかけているなら、この呼びかけはその答えである。
+		// 別の依頼として断ると、問われた人は答える手段を持たない。
+		if b.answer(sess.ID, in.AuthorID, text) {
+			return
+		}
 		// 待ち行列は作らない。断られたことが分かれば、言い直すか待てる。
 		b.reply(ctx, api, in, "いまこのチャンネルの別の依頼を処理しています。終わってからもう一度呼んでください。")
 		return

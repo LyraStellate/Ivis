@@ -66,14 +66,15 @@ func (r *run) waiting() bool {
 	return false
 }
 
-// answered は承認待ちの印を外す。押されたのに押しボタンが残っていると、
-// もう一度押せるように見える。
-func (r *run) answered(approvalID string) {
+// answered は待ちの印を外す。押されたのに押しボタンが残っていると、もう一度
+// 押せるように見える。問いも同じで、答えたのに問われたままに見えては困る。
+func (r *run) answered(id string) {
 	r.mu.Lock()
 	for _, it := range r.turn.items {
-		if it.approvalID == approvalID {
+		if it.approvalID == id || it.questionID == id {
 			it.waiting = false
 			it.approvalID = ""
+			it.questionID = ""
 		}
 	}
 	r.mu.Unlock()

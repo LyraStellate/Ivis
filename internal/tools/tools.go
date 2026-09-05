@@ -39,6 +39,9 @@ type ExecContext struct {
 	// Procs は走らせたままのプロセス。ツール呼び出しをまたいで生き続けるので、
 	// 実行 1 回の文脈ではなく、それより長く生きるものを受け取る。
 	Procs *ProcSet
+	// Ask は利用者へ問い、答えが返るまで待つ。engine が注入する。問える
+	// 相手が居ない場面では nil になる。
+	Ask func(ctx context.Context, question string, choices []string) (string, error)
 	// Delegate は委譲の実行。engine が注入する。
 	Delegate func(ctx context.Context, agentID, task string) (string, error)
 	// CheckDelegate は委譲先として許可されているかの判定。許されないときは
@@ -84,6 +87,7 @@ func NewRegistry() *Registry {
 	r.Add(&readProcessTool{})
 	r.Add(&writeProcessTool{})
 	r.Add(&stopProcessTool{})
+	r.Add(&askUserTool{})
 	return r
 }
 

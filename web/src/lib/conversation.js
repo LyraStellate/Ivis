@@ -176,6 +176,7 @@ export class Transcript {
           it.status = it.kind === 'agent' ? 'done' : 'stopped'
         }
         it.approvalId = ''
+        it.questionId = ''
         if (it.children) walk(it.children)
       }
     }
@@ -260,10 +261,26 @@ export class Transcript {
         break
       }
 
+      // 問いは承認と別に持つ。返すものが可否ではなく文なので、同じ入れ物に
+      // すると画面はどちらを待っているのか判別できない。
+      case 'question': {
+        const it = findById(box, ev.tool_call_id)
+        if (it) {
+          it.status = 'awaiting'
+          it.questionId = ev.question?.id ?? ''
+          it.question = ev.question?.text ?? ''
+          it.choices = ev.question?.choices ?? []
+          // 答えを待った分が混ざるため、所要時間は出さない。
+          it.startedAt = 0
+        }
+        break
+      }
+
       case 'tool_result': {
         const it = findById(box, ev.tool_call_id)
         if (!it) break
         it.approvalId = ''
+        it.questionId = ''
         if (it.startedAt) {
           it.ms = Date.now() - it.startedAt
           it.startedAt = 0

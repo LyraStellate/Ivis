@@ -44,6 +44,8 @@ export const rewindSession = (id, message_id) =>
 export const cancelRun = (id) => fetch(`/api/sessions/${id}/cancel`, json('POST')).then(unwrap)
 export const respondApproval = (id, approved) =>
   fetch(`/api/approvals/${id}`, json('POST', { approved })).then(unwrap)
+export const respondQuestion = (id, answer) =>
+  fetch(`/api/questions/${id}`, json('POST', { answer })).then(unwrap)
 
 // send は 1 ターンを実行し、サーバーから届くイベントを順に返す。
 // 通信は一方向で足りるので SSE を読むだけでよい。

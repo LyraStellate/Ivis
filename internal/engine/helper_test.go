@@ -106,7 +106,7 @@ func newFixture(t *testing.T, script func(n int, req provider.Request) []provide
 		"model":        "mock-model",
 		"instructions": "テスト用",
 		"tier":         1,
-		"tools":        []string{"list_dir", "read_file", "write_file", "delegate"},
+		"tools":        []string{"list_dir", "read_file", "write_file", "delegate", "ask_user"},
 		"skills":       []string{"*"},
 	})
 	// child は main より下位。委譲もできるので、上位や同位を呼べないことの

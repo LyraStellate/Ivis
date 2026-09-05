@@ -6,7 +6,8 @@
 
   let {
     session, agents, items, busy, notice, status, railHidden, onToggleRail,
-    onSend, onCancel, onApprove, onAgentChange, onDismiss, onRewind, colorOf, usage, draftBack,
+    onSend, onCancel, onApprove, onAnswer, onAgentChange, onDismiss, onRewind, colorOf, usage,
+    draftBack,
   } = $props()
 
   let scroller = $state(null)
@@ -95,6 +96,7 @@
       <Item
         {item}
         {onApprove}
+        {onAnswer}
         {colorOf}
         onRewind={busy ? null : onRewind}
         lead={itemLeads[i]}

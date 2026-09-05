@@ -54,9 +54,22 @@ type item struct {
 	// approvalID は承認を待っている間だけ入る。押しボタンはその出来事の
 	// メッセージに付く。何を承認するのかと、押す場所が離れていては選べない。
 	approvalID string
+	// questionID は問いへの答えを待っている間だけ入る。承認と分けるのは、
+	// 答え方が違うからである。承認は押しボタン、問いは返信で受ける。
+	questionID string
 }
 
 func (i *item) closed() bool { return !i.end.IsZero() }
+
+// questionText は問いを 1 つの文にする。候補は添えるだけで、押しボタンには
+// しない。答えは自由な文であり、候補どおりに答えるとは限らない。
+func questionText(q *engine.Question) string {
+	s := q.Text
+	if len(q.Choices) > 0 {
+		s += " (" + strings.Join(q.Choices, " / ") + ")"
+	}
+	return s
+}
 
 // turn は 1 ターンの経過。イベントで状態を更新し、いま出ているべき
 // メッセージの並びを組み立てる。外部とはやり取りしない。
@@ -140,6 +153,15 @@ func (t *turn) apply(ev engine.Event, now time.Time) {
 			t.items[i].approvalID = ev.Approval.ID
 		}
 
+	case engine.EvtQuestion:
+		if i, ok := t.byCall[ev.ToolCallID]; ok && ev.Question != nil {
+			t.items[i].waiting = true
+			t.items[i].questionID = ev.Question.ID
+			// 問いは全文が要る。切り詰めると、何を訊かれたのか分からない
+			// まま答えることになる。
+			t.items[i].detail = questionText(ev.Question)
+		}
+
 	case engine.EvtToolResult:
 		i, ok := t.byCall[ev.ToolCallID]
 		if !ok {
@@ -149,6 +171,7 @@ func (t *turn) apply(ev engine.Event, now time.Time) {
 		it.end = now
 		it.waiting = false
 		it.approvalID = ""
+		it.questionID = ""
 		if strings.HasPrefix(ev.Result, "エラー: ") {
 			it.failed = true
 			it.detail = clip(oneLine(strings.TrimPrefix(ev.Result, "エラー: ")), detailMax)

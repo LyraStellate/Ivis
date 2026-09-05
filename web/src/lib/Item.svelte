@@ -9,6 +9,7 @@
   let {
     item,
     onApprove,
+    onAnswer = null,
     onRewind = null,
     colorOf = null,
     fold = false,
@@ -32,6 +33,14 @@
   const nameColor = $derived(item.kind === 'user' ? USER_COLOR : whoColor(item.agentId, colorOf))
 
   const open = $derived(item.status === 'error' || item.status === 'awaiting')
+
+  // 問いへの答えの下書き。項目ごとに持つので、複数の問いが並んでも混ざらない。
+  let draft = $state('')
+  function send(text) {
+    if (!item.questionId || onAnswer == null) return
+    onAnswer(item.questionId, text ?? '')
+    draft = ''
+  }
 
   // 推論は、考えている間だけ開く。何も出ないまま待たされるより、いま何を
   // たどっているかが見えるほうが、待つ理由が分かる。本文が出はじめたら
@@ -138,7 +147,9 @@
           <span class="dot {item.status}"></span>
           <span class="tname mono">{item.tool}</span>
           <span class="args mono">{summarizeArgs(item.args)}</span>
-          {#if item.status === 'awaiting'}<span class="waiting">承認待ち</span>{/if}
+          {#if item.status === 'awaiting'}
+            <span class="waiting">{item.questionId ? '回答待ち' : '承認待ち'}</span>
+          {/if}
           {#if item.ms}<span class="ms mono tnum">{duration(item.ms)}</span>{/if}
         </summary>
         <div class="detail">
@@ -146,6 +157,35 @@
           {#if item.result}<pre class="mono result">{item.result}</pre>{/if}
         </div>
       </details>
+
+      {#if item.questionId}
+        <!-- 問いは会話の続きなので、入力欄をその場に出す。下の送信欄へ書かせると、
+             それは新しい依頼として保存され、待っている側には届かない。 -->
+        <div class="approval ask">
+          <p class="q">{item.question}</p>
+          {#if item.choices?.length}
+            <div class="acts choices">
+              {#each item.choices as c}
+                <button onclick={() => send(c)}>{c}</button>
+              {/each}
+            </div>
+          {/if}
+          <div class="acts">
+            <input
+              type="text"
+              bind:value={draft}
+              placeholder="答えを書く"
+              onkeydown={(e) => {
+                if (e.key === 'Enter' && !e.isComposing) send(draft)
+              }}
+            />
+            <button class="primary" onclick={() => send(draft)}>返す</button>
+          </div>
+          <p class="hint">
+            空のまま返すと、エージェントは自分で前提を決めて進めます。
+          </p>
+        </div>
+      {/if}
 
       {#if item.approvalId}
         <div class="approval">
@@ -181,6 +221,7 @@
               <Self
                 item={child}
                 {onApprove}
+                {onAnswer}
                 {colorOf}
                 lead={kidLeads[i]}
                 owner={kidOwners[i]}
@@ -390,6 +431,23 @@
   }
   .approval p { margin: 0 0 8px; }
   .approval .acts { display: flex; gap: 6px; }
+
+  /* 問いは承認と同じ枠に置くが、線の色だけ変える。押して通すものと、
+     書いて返すものが同じ見た目だと、何を求められているか分からない。 */
+  .ask { border-left-color: var(--ok); }
+  .ask .q { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .ask .choices { flex-wrap: wrap; margin-bottom: 6px; }
+  .ask input {
+    flex: 1;
+    min-width: 0;
+    font: inherit;
+    color: var(--fg);
+    background: var(--g2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    padding: 5px 8px;
+  }
+  .ask .hint { margin: 8px 0 0; color: var(--fg-muted); font-size: 11px; }
 
   /* 委譲。上下の折れは、2 辺の境界と 1 つの丸みを持つ擬似要素で描く。
      畳んでいるときは行き先が無いので折れを出さない。 */

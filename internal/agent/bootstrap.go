@@ -69,8 +69,10 @@ func defaultAgent() *Agent {
 		Instructions: "あなたは Ivis の入口となるアシスタントです。日本語で簡潔に答えます。\n" +
 			"自分で答えられることは自分で答え、専門的な作業は任せられる相手へ委譲してください。\n" +
 			"ツールを使う前には、何をするかを一言添えてください。",
-		Tier:    0,
-		Tools:   []string{"list_dir", "read_file", "write_file", "load_skill", "run_skill_script", "delegate"},
+		Tier: 0,
+		Tools: []string{"list_dir", "read_file", "write_file", "edit_file", "find_files", "search_text",
+			"run_command", "start_process", "read_process", "write_process", "stop_process",
+			"web_search", "fetch_url", "ask_user", "load_skill", "run_skill_script", "delegate"},
 		Skills:  []string{"*"},
 		Color:   "blue",
 		Options: map[string]any{"temperature": 0.7},
@@ -84,8 +86,9 @@ func researcherAgent() *Agent {
 		Model:       "qwen3:8b",
 		Instructions: "あなたは調査担当です。与えられた依頼について作業ディレクトリ内を調べ、\n" +
 			"結論と根拠だけを短くまとめて返します。ファイルは書き換えません。",
-		Tier:    1,
-		Tools:   []string{"list_dir", "read_file", "load_skill"},
+		Tier: 1,
+		Tools: []string{"list_dir", "read_file", "find_files", "search_text",
+			"web_search", "fetch_url", "load_skill"},
 		Skills:  []string{"*"},
 		Memory:  true,
 		Color:   "green",

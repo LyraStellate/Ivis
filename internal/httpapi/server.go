@@ -46,6 +46,9 @@ type Server struct {
 	mu sync.Mutex
 	// pending は承認待ちの応答先。
 	pending map[string]chan bool
+	// asking は問いへの答えの届け先。承認と別に持つのは、返るものが
+	// 可否ではなく文だからである。
+	asking map[string]chan string
 }
 
 // Deps は Server の構築に必要な部品。
@@ -78,6 +81,7 @@ func New(d Deps) *Server {
 		runs:    engine.NewRuns(),
 		procs:   tools.NewProcSet(),
 		pending: map[string]chan bool{},
+		asking:  map[string]chan string{},
 	}
 	s.eng = &engine.Engine{
 		Cfg:      d.Config,
@@ -87,6 +91,7 @@ func New(d Deps) *Server {
 		Tools:    d.Tools,
 		Provider: d.Prov,
 		Approver: s,
+		Asker:    s,
 		Search:   websearch.New(d.Config.SearchBackend, d.Config.SearchAPIKey),
 		Procs:    s.procs,
 	}
@@ -157,6 +162,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/sessions/{id}/cancel", s.handleCancel)
 	mux.HandleFunc("POST /api/sessions/{id}/rewind", s.handleRewind)
 	mux.HandleFunc("POST /api/approvals/{id}", s.handleApproval)
+	mux.HandleFunc("POST /api/questions/{id}", s.handleAnswer)
 
 	mux.Handle("/", s.staticHandler())
 	return mux

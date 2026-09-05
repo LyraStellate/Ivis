@@ -48,11 +48,24 @@ func parseButton(customID string) (kind, arg string, ok bool) {
 	return "", "", false
 }
 
+// askWait は答えが返らないまま置かれた問いを諦めるまでの時間。
+//
+// 承認より長く待つ。承認は「いま出す手を通すか」なので、居なければ通さない
+// で済む。問いは「何を作るか」なので、答えが来るなら待つ価値がある。
+var askWait = 15 * time.Minute
+
 // pending は押されるのを待っている承認 1 件。
 type pending struct {
 	ch chan bool
 	// asker は押せる相手。呼びかけた本人だけが押せる。他の人が押せると、
 	// 依頼していない人が実行を通せることになる。
+	asker string
+}
+
+// asking は答えを待っている問い 1 件。会話ごとに 1 つしか無い。走っている
+// ターンは 1 本で、そのターンが同時に 2 つ問うことはない。
+type asking struct {
+	ch    chan string
 	asker string
 }
 
@@ -62,6 +75,66 @@ func (b *Bridge) Owns(sessionID string) bool {
 	defer b.mu.Unlock()
 	_, ok := b.active[sessionID]
 	return ok
+}
+
+// Ask は engine.Asker の実装。問いをチャンネルへ出し、同じ人が次に呼びかけて
+// くるのを待つ。
+//
+// 押しボタンではなく発言で受けるのは、答えが自由な文だからである。候補が
+// あるときも、その通りに答えるとは限らない。
+func (b *Bridge) Ask(ctx context.Context, q engine.Question) (string, error) {
+	b.mu.Lock()
+	r := b.active[q.SessionID]
+	asker := b.asker[q.SessionID]
+	b.mu.Unlock()
+	if r == nil {
+		return "", nil
+	}
+
+	ch := make(chan string, 1)
+	b.mu.Lock()
+	b.answers[q.SessionID] = &asking{ch: ch, asker: asker}
+	b.mu.Unlock()
+	defer func() {
+		b.mu.Lock()
+		delete(b.answers, q.SessionID)
+		b.mu.Unlock()
+		r.answered(q.ID)
+	}()
+
+	// 待たせる側なので、間隔を待たずに出す。
+	r.nudge()
+
+	timer := time.NewTimer(askWait)
+	defer timer.Stop()
+
+	select {
+	case ans := <-ch:
+		return ans, nil
+	case <-timer.C:
+		return "", nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+// answer は届いた発言を、待っている問いへ渡す。渡せたら true。
+//
+// 呼びかけた本人だけが答えられる。走っている依頼の続きなので、他の人の発言を
+// 答えとして差し込むと、頼んでいない人が仕事の中身を決めることになる。
+func (b *Bridge) answer(sessionID, from, text string) bool {
+	b.mu.Lock()
+	a, ok := b.answers[sessionID]
+	b.mu.Unlock()
+	if !ok || (a.asker != "" && from != a.asker) {
+		return false
+	}
+	select {
+	case a.ch <- text:
+		return true
+	default:
+		return false
+	}
 }
 
 // Request は engine.Approver の実装。ツールの埋め込みへボタンを出し、

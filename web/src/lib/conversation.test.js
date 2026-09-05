@@ -92,6 +92,36 @@ describe('ストリームの反映', () => {
     expect(t.items[0].approvalId).toBe('')
   })
 
+  it('問いは呼び出しの行に集まり、答えると消える', () => {
+    const t = new Transcript([])
+    t.apply({ type: 'tool_call', tool_call_id: 'x.0', tool: 'ask_user', depth: 0 })
+    t.apply({
+      type: 'question',
+      tool_call_id: 'x.0',
+      question: { id: 'q1', text: 'どちらにしますか', choices: ['A', 'B'] },
+      depth: 0,
+    })
+    expect(t.items).toHaveLength(1)
+    expect(t.items[0].status).toBe('awaiting')
+    expect(t.items[0].questionId).toBe('q1')
+    expect(t.items[0].question).toBe('どちらにしますか')
+    expect(t.items[0].choices).toEqual(['A', 'B'])
+
+    t.apply({ type: 'tool_result', tool_call_id: 'x.0', result: 'A', depth: 0 })
+    expect(t.items[0].questionId).toBe('')
+    expect(t.items[0].status).toBe('done')
+  })
+
+  // 待っている問いを抱えたまま切れると、答える先の無い入力欄が残る。
+  it('切れたときに問いの待ちを畳む', () => {
+    const t = new Transcript([])
+    t.apply({ type: 'tool_call', tool_call_id: 'x.0', tool: 'ask_user', depth: 0 })
+    t.apply({ type: 'question', tool_call_id: 'x.0', question: { id: 'q1', text: 'ん?' }, depth: 0 })
+    t.settle()
+    expect(t.items[0].questionId).toBe('')
+    expect(t.items[0].status).toBe('stopped')
+  })
+
   it('拒否された実行は失敗ではなく拒否として残る', () => {
     const t = new Transcript([])
     t.apply({ type: 'tool_call', tool_call_id: 'x.0', tool: 'write_file', depth: 0 })

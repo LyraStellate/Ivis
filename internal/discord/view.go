@@ -134,6 +134,7 @@ func (t *turn) answerText(it *item) string {
 const (
 	stageRunning  = "running"
 	stageApproval = "approval"
+	stageQuestion = "question"
 	stageComplete = "complete"
 	stageFailed   = "failed"
 	stageAborted  = "aborted"
@@ -157,6 +158,8 @@ func stageOf(it *item) string {
 	switch {
 	case it.failed:
 		return stageFailed
+	case it.questionID != "":
+		return stageQuestion
 	case it.waiting:
 		return stageApproval
 	case it.aborted:

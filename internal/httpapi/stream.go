@@ -118,6 +118,56 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleAnswer は問いへの答えを受ける。
+func (s *Server) handleAnswer(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Answer string `json:"answer"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	s.mu.Lock()
+	ch, ok := s.asking[r.PathValue("id")]
+	s.mu.Unlock()
+	if !ok {
+		writeError(w, http.StatusNotFound, errors.New("その問いは既に終了しています"))
+		return
+	}
+	select {
+	case ch <- in.Answer:
+	default:
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Ask は engine.Asker の実装。答えが返るまで待ち、待機中も中断できる。
+//
+// 承認と同じく、どこで受けるかはその実行がどこから始まったかで決まる。
+// 画面を開いていない相手に、画面でしか返せない問いを出しても答えは返らない。
+func (s *Server) Ask(ctx context.Context, q engine.Question) (string, error) {
+	if s.discord != nil && s.discord.Owns(q.SessionID) {
+		return s.discord.Ask(ctx, q)
+	}
+
+	ch := make(chan string, 1)
+	s.mu.Lock()
+	s.asking[q.ID] = ch
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		delete(s.asking, q.ID)
+		s.mu.Unlock()
+	}()
+
+	select {
+	case ans := <-ch:
+		return ans, nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
 // Request は engine.Approver の実装。承認が返るまで待ち、待機中も中断できる。
 //
 // 承認をどこで受けるかは、その実行がどこから始まったかで決まる。Discord から

@@ -41,6 +41,32 @@ type Approver interface {
 	Request(ctx context.Context, req ApprovalRequest) (bool, error)
 }
 
+// Question は利用者への問い 1 件。
+//
+// 承認と別の型にするのは、返るものが違うからである。承認は可否だが、これは
+// 文が返る。同じ仕組みに載せると、どちらを待っているのか画面が判別できない。
+type Question struct {
+	ID        string `json:"id"`
+	SessionID string `json:"session_id"`
+	AgentID   string `json:"agent_id"`
+	// ToolCallID はどの呼び出しから出た問いかを指す。問いの表示を、
+	// それを出した呼び出しの直下に置くために要る。
+	ToolCallID string `json:"tool_call_id"`
+	Text       string `json:"text"`
+	// Choices は選ばせたい候補。空なら自由に書いてもらう。
+	Choices []string `json:"choices,omitempty"`
+}
+
+// Asker は利用者へ問う窓口。HTTP 層が実装する。
+//
+// 承認と分けるのは、承認が「いま出す手を通すか」であるのに対し、これは
+// 「何を作るか」を決める問いだからである。通す通さないの二択に押し込むと、
+// 答えが返らない。
+type Asker interface {
+	// Ask は答えを返す。待機中も ctx の取り消しで中断できる。
+	Ask(ctx context.Context, q Question) (string, error)
+}
+
 // イベント種別。UI はこれを見て表示を組み立てる。
 const (
 	EvtUserSaved     = "user_saved"
@@ -51,6 +77,7 @@ const (
 	EvtToolCall      = "tool_call"
 	EvtToolResult    = "tool_result"
 	EvtApproval      = "approval_request"
+	EvtQuestion      = "question"
 	EvtDelegateStart = "delegate_start"
 	EvtDelegateEnd   = "delegate_end"
 	EvtError         = "error"
@@ -77,6 +104,7 @@ type Event struct {
 	// 同じことを二重に言う。
 	Kind     string           `json:"kind,omitempty"`
 	Approval *ApprovalRequest `json:"approval,omitempty"`
+	Question *Question        `json:"question,omitempty"`
 	// PromptTokens はモデルへ送った入力のトークン数、ContextLimit はその
 	// モデルの文脈長。分母が分からないときは 0 で、画面は割合を出さない。
 	PromptTokens int `json:"prompt_tokens,omitempty"`
@@ -134,6 +162,8 @@ type Engine struct {
 	Tools    *tools.Registry
 	Provider provider.Provider
 	Approver Approver
+	// Asker は利用者へ問う窓口。無ければエージェントは問えず、自分で決める。
+	Asker Asker
 	// Search は Web 検索の取得元。設定に応じて差し替わる。
 	Search websearch.Searcher
 	// Procs は走らせたままのプロセス。ターンをまたいで生きるので、実行
@@ -221,6 +251,8 @@ func systemPrompt(a *agent.Agent, skills []*skillreg.Skill, delegates []*agent.A
 			fmt.Fprintf(&b, "- %s: %s\n", s.Name, oneLine(s.Description, 200))
 		}
 	}
+	b.WriteString("\n" + autonomy(a.Allows("ask_user")))
+
 	if len(delegates) > 0 {
 		fmt.Fprintf(&b, "\nあなたは Tier %d です。仕事を任せられるのは自分より下位 "+
 			"(Tier の数字が大きい) の相手だけで、次のエージェントを delegate で呼べます:\n", a.Tier)
@@ -229,6 +261,31 @@ func systemPrompt(a *agent.Agent, skills []*skillreg.Skill, delegates []*agent.A
 				oneLine(describe(d), 200))
 		}
 	}
+	return b.String()
+}
+
+// autonomy は「どこまで自分で決めてよいか」を書く。
+//
+// 書かないと、モデルは一手ごとに確かめようとする。確かめる先が居ない場面でも
+// 確かめようとするので、ターンは何も進まないまま終わる。止まってよい場面を
+// 挙げ、それ以外は進めと明示するほうが、丁寧に書くよりよく効く。
+//
+// 問う手段の有無で文面を変えるのは、持っていない道具を勧めても、モデルは
+// 代わりに本文で問いかけてしまうからである。本文の問いかけはターンの終わりで
+// あって、誰も答えない。
+func autonomy(canAsk bool) string {
+	var b strings.Builder
+	b.WriteString("\n進め方:\n")
+	b.WriteString("- 依頼を最後までやり切ってから答えてください。途中経過の報告のために止まらないこと。\n")
+	b.WriteString("- 調べれば分かることは調べ、決められることは決めて進めてください。\n")
+	b.WriteString("- 選ぶ余地があるときは妥当な既定を選び、選んだ前提を答えに書き添えてください。\n")
+	if canAsk {
+		b.WriteString("- 手を止めてよいのは、答えによって作るものが変わり、かつ自分では決められないときだけです。\n")
+		b.WriteString("  そのときは ask_user で問います。本文で問いかけても、それは答えの終わりとして扱われ、誰も答えません。\n")
+	} else {
+		b.WriteString("- 問い返す手段はありません。分からない点は前提を置いて進め、置いた前提を答えに書いてください。\n")
+	}
+	b.WriteString("- 失敗したら、理由を読んで別の手を試してください。同じ手を繰り返さないこと。\n")
 	return b.String()
 }
 

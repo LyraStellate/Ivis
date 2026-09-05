@@ -201,6 +201,10 @@
     await guard(() => api.respondApproval(approvalId, ok))
   }
 
+  async function answer(questionId, text) {
+    await guard(() => api.respondQuestion(questionId, text))
+  }
+
   async function reload() {
     status = await guard(api.reloadDefs)
     agents = (await guard(api.listAgents)) ?? []
@@ -259,6 +263,7 @@
         onRewind={askRewind}
         onCancel={cancel}
         onApprove={approve}
+        onAnswer={answer}
         onAgentChange={changeAgent}
         onDismiss={() => (notice = null)}
       />

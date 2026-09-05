@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/LyraStellate/Ivis/internal/agent"
@@ -101,8 +102,11 @@ func (e *Engine) runOneTool(ctx context.Context, rc *runCtx, callID string, call
 		AgentID:        rc.agent.ID,
 		// 走らせたままのプロセスは会話ごとに束ねる。委譲された子も同じ会話で
 		// 走るので、親が起動したものを子から読める。
-		Session:       rc.sessionID,
-		Procs:         e.Procs,
+		Session: rc.sessionID,
+		Procs:   e.Procs,
+		Ask: func(ctx context.Context, q string, choices []string) (string, error) {
+			return e.ask(ctx, rc, callID, q, choices)
+		},
 		CheckDelegate: func(id string) error { return e.checkDelegate(rc.agent, id) },
 		Delegate: func(ctx context.Context, agentID, task string) (string, error) {
 			// 呼び出しの識別子を渡し、委譲の開始と終了もその呼び出しに
@@ -111,6 +115,38 @@ func (e *Engine) runOneTool(ctx context.Context, rc *runCtx, callID string, call
 		},
 	}
 	return tool.Execute(ctx, ec, call.Arguments)
+}
+
+// ask は利用者へ問い、答えが返るまで待つ。
+//
+// 待っている間もターンは終わらない。答えを次のツール結果として返すことで、
+// モデルは同じ思考の続きから進める。問い直しのために会話を送り直させると、
+// そこまでの経過を組み立て直すことになる。
+func (e *Engine) ask(ctx context.Context, rc *runCtx, callID, text string, choices []string) (string, error) {
+	if e.Asker == nil {
+		return "いまは利用者へ問えません。妥当な前提を自分で選んで進め、選んだ前提を答えに書き添えてください。", nil
+	}
+	q := Question{
+		ID:         store.NewID(),
+		SessionID:  rc.sessionID,
+		AgentID:    rc.agent.ID,
+		ToolCallID: callID,
+		Text:       text,
+		Choices:    choices,
+	}
+	rc.emit(Event{Type: EvtQuestion, Depth: rc.depth, AgentID: rc.agent.ID,
+		Tool: "ask_user", ToolCallID: callID, Question: &q})
+
+	ans, err := e.Asker.Ask(ctx, q)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(ans) == "" {
+		// 空の答えは「決めてよい」と読む。ここで止めると、答えられない場面で
+		// ターンが進まなくなる。
+		return "答えは返りませんでした。妥当な前提を自分で選んで進め、選んだ前提を答えに書き添えてください。", nil
+	}
+	return ans, nil
 }
 
 // delegate は子エージェントを独立した文脈で走らせ、その成果だけを親へ返す。
