@@ -136,6 +136,9 @@ type Engine struct {
 	Approver Approver
 	// Search は Web 検索の取得元。設定に応じて差し替わる。
 	Search websearch.Searcher
+	// Procs は走らせたままのプロセス。ターンをまたいで生きるので、実行
+	// ループではなくエンジンが持つ。
+	Procs *tools.ProcSet
 
 	// ctxLen はモデルごとの文脈長。毎ターン提供元へ問い合わせるほど変わる
 	// ものではない。ゼロ値で使えるので初期化は要らない。

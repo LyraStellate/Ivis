@@ -34,6 +34,11 @@ type ExecContext struct {
 	Search websearch.Searcher
 	// AgentID は呼び出し元のエージェント。
 	AgentID string
+	// Session は会話の識別子。走らせたままのプロセスを会話ごとに束ねる。
+	Session string
+	// Procs は走らせたままのプロセス。ツール呼び出しをまたいで生き続けるので、
+	// 実行 1 回の文脈ではなく、それより長く生きるものを受け取る。
+	Procs *ProcSet
 	// Delegate は委譲の実行。engine が注入する。
 	Delegate func(ctx context.Context, agentID, task string) (string, error)
 	// CheckDelegate は委譲先として許可されているかの判定。許されないときは
@@ -75,6 +80,10 @@ func NewRegistry() *Registry {
 	r.Add(&runCommandTool{})
 	r.Add(&webSearchTool{})
 	r.Add(&fetchURLTool{})
+	r.Add(&startProcessTool{})
+	r.Add(&readProcessTool{})
+	r.Add(&writeProcessTool{})
+	r.Add(&stopProcessTool{})
 	return r
 }
 

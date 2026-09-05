@@ -107,6 +107,9 @@ func (s *Server) handlePatchSession(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	s.runs.Cancel(id)
+	// その会話が起動したものも一緒に止める。会話を消したのに、その会話が
+	// 走らせたものだけが残る状態を作らない。
+	s.procs.CloseSession(id)
 	if err := s.st.DeleteSession(r.Context(), id); err != nil {
 		writeError(w, statusFor(err), err)
 		return

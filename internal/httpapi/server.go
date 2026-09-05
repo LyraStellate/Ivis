@@ -39,6 +39,10 @@ type Server struct {
 	// いないだけになる。
 	discord *discord.Bridge
 
+	// procs は走らせたままのプロセス。会話をまたいで生きるので、実行の
+	// 占有ではなくここが持つ。
+	procs *tools.ProcSet
+
 	mu sync.Mutex
 	// pending は承認待ちの応答先。
 	pending map[string]chan bool
@@ -72,6 +76,7 @@ func New(d Deps) *Server {
 		newProv: d.NewProvider,
 		assets:  d.Assets,
 		runs:    engine.NewRuns(),
+		procs:   tools.NewProcSet(),
 		pending: map[string]chan bool{},
 	}
 	s.eng = &engine.Engine{
@@ -83,6 +88,7 @@ func New(d Deps) *Server {
 		Provider: d.Prov,
 		Approver: s,
 		Search:   websearch.New(d.Config.SearchBackend, d.Config.SearchAPIKey),
+		Procs:    s.procs,
 	}
 	s.discord = discord.New(discord.Deps{
 		Cfg:    d.Config,
@@ -100,8 +106,12 @@ func New(d Deps) *Server {
 // Start は待ち受け以外の常駐を始める。いまは Discord への接続だけ。
 func (s *Server) Start() { s.discord.Apply(s.cfg.Discord) }
 
-// Close は常駐を止める。
-func (s *Server) Close() { s.discord.Stop() }
+// Close は常駐を止める。走らせたままのプロセスもここで片付ける。残すと、
+// Ivis を終えたのにその子だけが動き続ける。
+func (s *Server) Close() {
+	s.discord.Stop()
+	s.procs.Close()
+}
 
 // refreshDiscord は現在の設定を接続へ反映する。
 func (s *Server) refreshDiscord() { s.discord.Apply(s.cfg.Discord) }

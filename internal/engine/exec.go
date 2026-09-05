@@ -99,7 +99,11 @@ func (e *Engine) runOneTool(ctx context.Context, rc *runCtx, callID string, call
 		Skills:         e.Skills,
 		ScriptTimeout:  time.Duration(e.Cfg.ScriptTimeoutSec) * time.Second,
 		AgentID:        rc.agent.ID,
-		CheckDelegate:  func(id string) error { return e.checkDelegate(rc.agent, id) },
+		// 走らせたままのプロセスは会話ごとに束ねる。委譲された子も同じ会話で
+		// 走るので、親が起動したものを子から読める。
+		Session:       rc.sessionID,
+		Procs:         e.Procs,
+		CheckDelegate: func(id string) error { return e.checkDelegate(rc.agent, id) },
 		Delegate: func(ctx context.Context, agentID, task string) (string, error) {
 			// 呼び出しの識別子を渡し、委譲の開始と終了もその呼び出しに
 			// 結び付けられるようにする。
