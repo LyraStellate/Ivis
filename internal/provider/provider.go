@@ -87,6 +87,9 @@ type Event struct {
 	Err       error
 	// Usage は EventDone に載る。得られない提供元では nil。
 	Usage *Usage
+	// Truncated は EventDone に載る。文脈が尽きて生成が打ち切られたこと。
+	// これを伝えないと、途中で終わった応答が答え終えたものと区別できない。
+	Truncated bool
 }
 
 // Model は提供元が持つモデルの情報。

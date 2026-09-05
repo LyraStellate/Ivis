@@ -38,6 +38,11 @@ type Config struct {
 	MaxIterations int `json:"max_iterations"`
 	// MaxDelegationDepth は委譲の深さの上限。
 	MaxDelegationDepth int `json:"max_delegation_depth"`
+	// ContextTokens は 1 回の生成で使う文脈長 (num_ctx)。明示しないと提供元の
+	// 既定 (Ollama は 4096) が使われ、ツールの結果を往復するだけで埋まる。
+	// 埋まると古い側から黙って捨てられ、指示文ごと失われて応答が途中で終わる。
+	// エージェント定義の options に num_ctx があれば、そちらが優先される。
+	ContextTokens int `json:"context_tokens"`
 	// ScriptTimeoutSec はスキル同梱スクリプトの実行時間の上限 (秒)。
 	ScriptTimeoutSec int `json:"script_timeout_sec"`
 	// CommandTimeoutSec は run_command の実行時間の上限 (秒)。用途が違えば
@@ -96,8 +101,9 @@ func Default() *Config {
 		SkillPaths:         []string{filepath.Join(home, ".ivis", "skills")},
 		DataDir:            filepath.Join(home, ".ivis"),
 		WorkspaceDir:       filepath.Join(home, ".ivis", "workspace"),
-		MaxIterations:      12,
+		MaxIterations:      40,
 		MaxDelegationDepth: 3,
+		ContextTokens:      16384,
 		ScriptTimeoutSec:   120,
 		CommandTimeoutSec:  120,
 		AutoApprove:        []string{},
@@ -223,6 +229,9 @@ func (c *Config) normalize() {
 	}
 	if c.MaxDelegationDepth <= 0 {
 		c.MaxDelegationDepth = d.MaxDelegationDepth
+	}
+	if c.ContextTokens <= 0 {
+		c.ContextTokens = d.ContextTokens
 	}
 	if c.ScriptTimeoutSec <= 0 {
 		c.ScriptTimeoutSec = d.ScriptTimeoutSec

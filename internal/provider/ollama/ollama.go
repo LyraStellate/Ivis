@@ -71,6 +71,8 @@ type chatChunk struct {
 	Message chatMessage `json:"message"`
 	Done    bool        `json:"done"`
 	Error   string      `json:"error"`
+	// DoneReason は終わり方。"length" は文脈が尽きて打ち切られたことを指す。
+	DoneReason string `json:"done_reason"`
 	// 最後のチャンクにだけ載る。入力に何トークン使ったかの実測値。
 	PromptEvalCount int `json:"prompt_eval_count"`
 	EvalCount       int `json:"eval_count"`
@@ -143,6 +145,7 @@ func (c *Client) stream(ctx context.Context, resp *http.Response, model string, 
 	dec := json.NewDecoder(resp.Body)
 	var calls []provider.ToolCall
 	var usage *provider.Usage
+	truncated := false
 
 	for {
 		var chunk chatChunk
@@ -180,6 +183,9 @@ func (c *Client) stream(ctx context.Context, resp *http.Response, model string, 
 			})
 		}
 		if chunk.Done {
+			// 上限に当たって止まったのか、言い終えたのかは、ここでしか
+			// 分からない。伝えないと、途中で切れた応答が完成品として残る。
+			truncated = chunk.DoneReason == "length"
 			if chunk.PromptEvalCount > 0 {
 				usage = &provider.Usage{
 					PromptTokens: chunk.PromptEvalCount,
@@ -195,7 +201,7 @@ func (c *Client) stream(ctx context.Context, resp *http.Response, model string, 
 			return
 		}
 	}
-	send(provider.Event{Type: provider.EventDone, Usage: usage})
+	send(provider.Event{Type: provider.EventDone, Usage: usage, Truncated: truncated})
 }
 
 type tagsResponse struct {

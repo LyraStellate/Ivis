@@ -51,6 +51,7 @@
         agent_paths: cfg.agent_paths,
         skill_paths: cfg.skill_paths,
         max_iterations: cfg.max_iterations,
+        context_tokens: cfg.context_tokens,
         max_delegation_depth: cfg.max_delegation_depth,
         script_timeout_sec: cfg.script_timeout_sec,
         command_timeout_sec: cfg.command_timeout_sec,
@@ -275,9 +276,16 @@
             <input type="checkbox" bind:checked={cfg.require_approval} />
             <span>確認を求めるツールの実行前に確認する</span>
           </label>
+          <p class="hint">
+            文脈長は 1 回の生成でモデルへ渡せる量です。小さいと、途中で古い側から
+            捨てられて応答が途中で終わります。大きいほど記憶に載る量が増えます。
+            エージェント側の options に num_ctx があれば、そちらが優先されます。
+          </p>
           <div class="nums">
             <label>1 ターンのツール呼び出し上限
               <input type="number" bind:value={cfg.max_iterations} /></label>
+            <label>文脈長 (トークン)
+              <input type="number" bind:value={cfg.context_tokens} /></label>
             <label>委譲の深さの上限
               <input type="number" bind:value={cfg.max_delegation_depth} /></label>
             <label>スクリプトの実行時間の上限(秒)

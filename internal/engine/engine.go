@@ -190,22 +190,49 @@ func (e *Engine) noteUsage(ctx context.Context, rc *runCtx, u *provider.Usage) {
 	rc.emit(Event{Type: EvtUsage, PromptTokens: u.PromptTokens, ContextLimit: limit})
 }
 
-// contextLimit は割合の分母を返す。定義に指定があればそれを、無ければモデル
-// 自身が持つ値を使う。どちらも得られなければ 0 を返し、画面は割合を出さない。
+// contextLimit は割合の分母を返す。実際に使う文脈長そのものである。
+//
+// モデルが持てる最大値ではなく、こちらが渡す値を分母にする。渡した値より
+// 大きい分母で割ると、まだ余裕があるように見えているうちに溢れる。
 func (e *Engine) contextLimit(ctx context.Context, a *agent.Agent) int {
+	return e.numCtx(ctx, a)
+}
+
+// numCtx はそのエージェントの生成で使う文脈長を返す。
+//
+// 明示しないと提供元の既定 (Ollama は 4096) が使われる。ツールの結果を
+// 何度も往復する使い方では、それはすぐに埋まる。埋まると古い側から黙って
+// 捨てられるため、指示文ごと失われ、応答は途中で終わる。何を渡しているかを
+// こちらで決め切る。
+func (e *Engine) numCtx(ctx context.Context, a *agent.Agent) int {
+	// 定義に書かれていれば、それが利用者の意思である。
 	if n := numOption(a.Options["num_ctx"]); n > 0 {
 		return n
 	}
-	if v, ok := e.ctxLen.Load(a.Model); ok {
+	want := e.Cfg.ContextTokens
+	if want <= 0 {
+		want = config.Default().ContextTokens
+	}
+	// モデルが持てる以上を求めても意味がない。持てる値が分かるなら、
+	// そちらで頭を打つ。
+	if max := e.modelContext(ctx, a.Model); max > 0 && max < want {
+		return max
+	}
+	return want
+}
+
+// modelContext はモデル自身が持つ文脈長を返す。分からなければ 0。
+func (e *Engine) modelContext(ctx context.Context, model string) int {
+	if v, ok := e.ctxLen.Load(model); ok {
 		return v.(int)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	n, err := e.Provider.ContextLength(ctx, a.Model)
+	n, err := e.Provider.ContextLength(ctx, model)
 	if err != nil {
 		return 0
 	}
-	e.ctxLen.Store(a.Model, n)
+	e.ctxLen.Store(model, n)
 	return n
 }
 

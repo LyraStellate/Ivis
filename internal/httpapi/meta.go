@@ -135,6 +135,7 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		WorkspaceDir       string   `json:"workspace_dir"`
 		MaxIterations      int      `json:"max_iterations"`
 		MaxDelegationDepth int      `json:"max_delegation_depth"`
+		ContextTokens      int      `json:"context_tokens"`
 		ScriptTimeoutSec   int      `json:"script_timeout_sec"`
 		CommandTimeoutSec  int      `json:"command_timeout_sec"`
 		RequireApproval    *bool    `json:"require_approval"`
@@ -179,6 +180,9 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.MaxDelegationDepth > 0 {
 		s.cfg.MaxDelegationDepth = in.MaxDelegationDepth
+	}
+	if in.ContextTokens > 0 {
+		s.cfg.ContextTokens = in.ContextTokens
 	}
 	if in.ScriptTimeoutSec > 0 {
 		s.cfg.ScriptTimeoutSec = in.ScriptTimeoutSec

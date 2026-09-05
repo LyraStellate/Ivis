@@ -75,6 +75,7 @@ func (e *Engine) loop(ctx context.Context, rc *runCtx) (string, error) {
 	sys := systemPrompt(rc.agent, e.Skills.Filter(rc.agent.Skills), e.delegateAgents(rc.agent),
 		e.Cfg.SessionWorkspace(rc.sessionID), time.Now())
 	defs := e.Tools.Defs(rc.agent.Allows)
+	opts := e.options(ctx, rc.agent)
 
 	var last string
 	for iter := 0; iter < e.Cfg.MaxIterations; iter++ {
@@ -82,7 +83,7 @@ func (e *Engine) loop(ctx context.Context, rc *runCtx) (string, error) {
 			Model:    rc.agent.Model,
 			Messages: append([]provider.Message{{Role: provider.RoleSystem, Content: sys}}, rc.msgs...),
 			Tools:    defs,
-			Options:  rc.agent.Options,
+			Options:  opts,
 			Think:    rc.agent.Thinking,
 		}
 
@@ -107,6 +108,22 @@ func (e *Engine) loop(ctx context.Context, rc *runCtx) (string, error) {
 	msg := fmt.Sprintf("ツール呼び出しが %d 回に達したため打ち切りました。", e.Cfg.MaxIterations)
 	rc.emit(Event{Type: EvtError, Depth: rc.depth, AgentID: rc.agent.ID, Error: msg})
 	return last, reported(errors.New(msg))
+}
+
+// options はモデルへ渡す生成パラメータを組み立てる。
+//
+// 定義のものをそのまま渡さず写しを作るのは、ここで足す文脈長が定義へ
+// 書き戻ってしまわないようにするためである。定義はファイルが正であり、
+// 実行の都合で決めた値がそこに混ざってはならない。
+func (e *Engine) options(ctx context.Context, a *agent.Agent) map[string]any {
+	opts := make(map[string]any, len(a.Options)+1)
+	for k, v := range a.Options {
+		opts[k] = v
+	}
+	if _, ok := opts["num_ctx"]; !ok {
+		opts["num_ctx"] = e.numCtx(ctx, a)
+	}
+	return opts
 }
 
 // generate は 1 回の生成を行い、保存した発言の識別子・本文・ツール呼び出しを返す。
@@ -138,6 +155,9 @@ func (e *Engine) generate(ctx context.Context, rc *runCtx, req provider.Request)
 	var think strings.Builder
 	var calls []provider.ToolCall
 	var genErr error
+	// cut は文脈が尽きて生成が打ち切られたこと。黙って途中で終わると、
+	// 利用者にはモデルが答え終えたように見える。
+	cut := false
 
 	// 途中経過を一定間隔で書き出す。プロセスが落ちてもここまでは残る。
 	flush := time.NewTicker(700 * time.Millisecond)
@@ -178,6 +198,7 @@ loop:
 				break loop
 			case provider.EventDone:
 				e.noteUsage(ctx, rc, ev.Usage)
+				cut = ev.Truncated
 				break loop
 			}
 		}
@@ -189,6 +210,17 @@ loop:
 		rc.emit(Event{Type: EvtError, MessageID: msg.ID, Depth: rc.depth,
 			AgentID: rc.agent.ID, Error: genErr.Error(), Kind: KindOf(genErr)})
 		return msg.ID, sb.String(), nil, reported(genErr)
+	}
+	if cut {
+		// 失敗ではないが、続きがある。何が起きたかと、次に何をすれば
+		// よいかを添える。
+		note := fmt.Sprintf("文脈の上限 (%d) に達したため、ここで打ち切られました。"+
+			"続きが要るなら、設定の文脈長を増やすか、会話を分けてください。",
+			e.contextLimit(ctx, rc.agent))
+		persist(note)
+		rc.emit(Event{Type: EvtError, MessageID: msg.ID, Depth: rc.depth,
+			AgentID: rc.agent.ID, Error: note})
+		return msg.ID, sb.String(), calls, nil
 	}
 	persist("")
 	rc.emit(Event{Type: EvtMessageEnd, MessageID: msg.ID, Depth: rc.depth})
