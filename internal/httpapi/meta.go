@@ -25,9 +25,14 @@ type statusBody struct {
 	Colors []string `json:"colors"`
 	// Tools は登録済みのツール名と、確認を求めるかの既定。画面が名前を持つと、
 	// ツールを増減したときに選べるものと実際に動くものがずれる。
-	Tools          []toolInfo           `json:"tools"`
-	SearchBackends []string             `json:"search_backends"`
-	Shell          string               `json:"shell"`
+	Tools          []toolInfo `json:"tools"`
+	SearchBackends []string   `json:"search_backends"`
+	Shell          string     `json:"shell"`
+	// Discord は連携の状態。繋がっているかと、失敗しているならその理由。
+	// ここに出さないと、トークンを間違えたことに利用者が気付けない。
+	DiscordEnabled bool                 `json:"discord_enabled"`
+	DiscordOK      bool                 `json:"discord_ok"`
+	DiscordErr     string               `json:"discord_error,omitempty"`
 	AgentErrors    []agent.LoadError    `json:"agent_errors"`
 	SkillErrors    []skillreg.LoadError `json:"skill_errors"`
 	Conflicts      []skillreg.Conflict  `json:"skill_conflicts"`
@@ -55,6 +60,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		body.ProviderOK = false
 		body.ProviderErr = err.Error()
 	}
+	body.DiscordEnabled = s.cfg.Discord.Enabled
+	body.DiscordOK, body.DiscordErr = s.discord.Status()
 	if body.AgentErrors == nil {
 		body.AgentErrors = []agent.LoadError{}
 	}
@@ -134,6 +141,8 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		AutoApprove        []string `json:"auto_approve"`
 		SearchBackend      string   `json:"search_backend"`
 		SearchAPIKey       *string  `json:"search_api_key"`
+		DiscordEnabled     *bool    `json:"discord_enabled"`
+		DiscordToken       *string  `json:"discord_token"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -192,6 +201,14 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	if in.SearchAPIKey != nil {
 		s.cfg.SearchAPIKey = *in.SearchAPIKey
 	}
+	if in.DiscordEnabled != nil {
+		s.cfg.Discord.Enabled = *in.DiscordEnabled
+	}
+	// トークンも消せる必要がある。有効かどうかと別に持つのは、消さずに
+	// 止められるようにするためである。
+	if in.DiscordToken != nil {
+		s.cfg.Discord.Token = *in.DiscordToken
+	}
 
 	if err := s.cfg.EnsureDirs(); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -205,6 +222,7 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// はずの接続先が次の生成まで効かない。
 	s.refreshProvider()
 	s.refreshSearch()
+	s.refreshDiscord()
 	s.agents.Load(s.cfg.AgentPaths)
 	s.skills.Load(s.cfg.SkillPaths)
 	writeJSON(w, http.StatusOK, s.cfg)

@@ -318,7 +318,9 @@
     <Confirm
       title="この会話を削除しますか"
       body={pendingDelete.title}
-      note="削除すると元に戻せません。エージェントの定義とスキルには影響しません。"
+      note={pendingDelete.source === 'discord'
+        ? 'このチャンネルの履歴が消えます。次にメンションされたら、新しい会話として作り直されます。'
+        : '削除すると元に戻せません。エージェントの定義とスキルには影響しません。'}
       confirmLabel="削除する"
       onConfirm={() => removeSession(pendingDelete.id)}
       onCancel={() => (pendingDelete = null)}

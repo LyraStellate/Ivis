@@ -11,6 +11,7 @@ import (
 
 	"github.com/LyraStellate/Ivis/internal/agent"
 	"github.com/LyraStellate/Ivis/internal/config"
+	"github.com/LyraStellate/Ivis/internal/discord"
 	"github.com/LyraStellate/Ivis/internal/engine"
 	"github.com/LyraStellate/Ivis/internal/provider"
 	"github.com/LyraStellate/Ivis/internal/skillreg"
@@ -31,9 +32,14 @@ type Server struct {
 	eng     *engine.Engine
 	assets  fs.FS
 
+	// runs は会話ごとの実行の占有。Discord ブリッジと共有する。共有しないと、
+	// 同じ会話が両方の入口から同時に走る (#617204)。
+	runs *engine.Runs
+	// discord は Discord との連携。設定で無効なときも実体はあり、繋いで
+	// いないだけになる。
+	discord *discord.Bridge
+
 	mu sync.Mutex
-	// running はセッションごとの中断関数。二重生成も防ぐ。
-	running map[string]context.CancelFunc
 	// pending は承認待ちの応答先。
 	pending map[string]chan bool
 }
@@ -49,6 +55,9 @@ type Deps struct {
 	// NewProvider は接続先が変わったときに提供元を作り直すために使う。
 	NewProvider func(baseURL string) provider.Provider
 	Assets      fs.FS
+	// Log は常駐部分の出来事を残す口。黙って失敗すると、繋がらない理由が
+	// 利用者にも手元にも残らない。
+	Log func(format string, args ...any)
 }
 
 // New は Server を組み立てる。
@@ -62,7 +71,7 @@ func New(d Deps) *Server {
 		prov:    d.Prov,
 		newProv: d.NewProvider,
 		assets:  d.Assets,
-		running: map[string]context.CancelFunc{},
+		runs:    engine.NewRuns(),
 		pending: map[string]chan bool{},
 	}
 	s.eng = &engine.Engine{
@@ -75,8 +84,27 @@ func New(d Deps) *Server {
 		Approver: s,
 		Search:   websearch.New(d.Config.SearchBackend, d.Config.SearchAPIKey),
 	}
+	s.discord = discord.New(discord.Deps{
+		Cfg:    d.Config,
+		Store:  d.Store,
+		Agents: d.Agents,
+		Runs:   s.runs,
+		Run: func(ctx context.Context, id, text string, emit engine.Emit) error {
+			return s.eng.Run(ctx, id, text, emit)
+		},
+		Log: d.Log,
+	})
 	return s
 }
+
+// Start は待ち受け以外の常駐を始める。いまは Discord への接続だけ。
+func (s *Server) Start() { s.discord.Apply(s.cfg.Discord) }
+
+// Close は常駐を止める。
+func (s *Server) Close() { s.discord.Stop() }
+
+// refreshDiscord は現在の設定を接続へ反映する。
+func (s *Server) refreshDiscord() { s.discord.Apply(s.cfg.Discord) }
 
 // refreshSearch は現在の設定で検索の取得元を作り直す。作り直さないと、
 // 設定画面で入れた鍵が次の起動まで効かない。

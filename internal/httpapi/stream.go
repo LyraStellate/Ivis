@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/LyraStellate/Ivis/internal/engine"
+	"github.com/LyraStellate/Ivis/internal/store"
 )
 
 // handleSend は 1 ターンを実行し、経過を SSE で流す。
@@ -27,8 +28,17 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("本文が空です"))
 		return
 	}
-	if _, err := s.st.GetSession(r.Context(), id); err != nil {
+	sess, err := s.st.GetSession(r.Context(), id)
+	if err != nil {
 		writeError(w, statusFor(err), err)
+		return
+	}
+	// Discord の会話へは画面から送らせない。送っても内容はチャンネルに
+	// 出ないので、次にそこで話す人は、自分の知らない文脈が挟まった状態で
+	// 会話を続けることになる (#617204)。
+	if sess.Source == store.SourceDiscord {
+		writeError(w, http.StatusConflict,
+			errors.New("この会話は Discord から進みます。画面からは送れません"))
 		return
 	}
 
@@ -39,12 +49,12 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx, cancel := context.WithCancel(r.Context())
-	if !s.beginRun(id, cancel) {
+	if !s.runs.Begin(id, cancel) {
 		cancel()
 		writeError(w, http.StatusConflict, errors.New("このセッションは生成中です"))
 		return
 	}
-	defer s.endRun(id)
+	defer s.runs.End(id)
 
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -78,7 +88,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 
 // handleCancel は生成中のターンを中断する。
 func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
-	if !s.cancelRun(r.PathValue("id")) {
+	if !s.runs.Cancel(r.PathValue("id")) {
 		writeError(w, http.StatusConflict, errors.New("このセッションは生成中ではありません"))
 		return
 	}
@@ -109,7 +119,15 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request) {
 }
 
 // Request は engine.Approver の実装。承認が返るまで待ち、待機中も中断できる。
+//
+// 承認をどこで受けるかは、その実行がどこから始まったかで決まる。Discord から
+// 始まった実行は Discord のボタンで受ける。画面を開いていない相手に、画面で
+// しか返せない要求を出しても答えは返らない (#617204)。
 func (s *Server) Request(ctx context.Context, req engine.ApprovalRequest) (bool, error) {
+	if s.discord != nil && s.discord.Owns(req.SessionID) {
+		return s.discord.Request(ctx, req)
+	}
+
 	ch := make(chan bool, 1)
 	s.mu.Lock()
 	s.pending[req.ID] = ch
@@ -126,42 +144,4 @@ func (s *Server) Request(ctx context.Context, req engine.ApprovalRequest) (bool,
 	case <-ctx.Done():
 		return false, ctx.Err()
 	}
-}
-
-func (s *Server) beginRun(id string, cancel context.CancelFunc) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, busy := s.running[id]; busy {
-		return false
-	}
-	s.running[id] = cancel
-	return true
-}
-
-// isRunning はそのセッションで生成が走っているかを返す。
-func (s *Server) isRunning(id string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, busy := s.running[id]
-	return busy
-}
-
-func (s *Server) endRun(id string) {
-	s.mu.Lock()
-	cancel, ok := s.running[id]
-	delete(s.running, id)
-	s.mu.Unlock()
-	if ok {
-		cancel()
-	}
-}
-
-func (s *Server) cancelRun(id string) bool {
-	s.mu.Lock()
-	cancel, ok := s.running[id]
-	s.mu.Unlock()
-	if ok {
-		cancel()
-	}
-	return ok
 }

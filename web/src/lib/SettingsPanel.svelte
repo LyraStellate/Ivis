@@ -28,6 +28,8 @@
   async function load() {
     try {
       cfg = await api.getConfig()
+      // 古い設定ファイルには discord が無い。束ねる先が無いと入力できない。
+      cfg.discord ??= { enabled: false, token: '' }
       status = await api.getStatus()
       skills = await api.listSkills()
       models = await api.listModels().catch(() => [])
@@ -56,6 +58,8 @@
         auto_approve: cfg.auto_approve ?? [],
         search_backend: cfg.search_backend,
         search_api_key: cfg.search_api_key ?? '',
+        discord_enabled: cfg.discord?.enabled ?? false,
+        discord_token: cfg.discord?.token ?? '',
       })
       status = await api.getStatus()
       skills = await api.listSkills()
@@ -167,6 +171,40 @@
           {:else if models.length}
             <p class="hint">利用できるモデル: {models.map((m) => m.name).join(', ')}</p>
           {/if}
+        </fieldset>
+
+        <fieldset>
+          <legend>Discord</legend>
+          <label class="check">
+            <input type="checkbox" bind:checked={cfg.discord.enabled} />
+            <span>Discord と連携する</span>
+          </label>
+          <label>
+            ボットのトークン
+            <input type="password" bind:value={cfg.discord.token} placeholder="(未設定)" />
+          </label>
+          {#if cfg.discord.enabled}
+            {#if status?.discord_ok}
+              <p class="hint">接続しています。チャンネルでボットをメンションすると答えます。</p>
+            {:else if status?.discord_error}
+              <p class="err">接続できません: {status.discord_error}</p>
+            {:else}
+              <p class="hint">まだ接続していません。トークンを入れて保存してください。</p>
+            {/if}
+          {/if}
+          <p class="hint">
+            開発者ポータルで <span class="mono">Message Content Intent</span> を有効にしてください。
+            有効にしないと、メンションは届いても本文が空で来ます。招待には
+            メッセージの送信・履歴の閲覧に加えて
+            <span class="mono">applications.commands</span> が要ります。無いと
+            <span class="mono">/stop</span> を登録できません。
+          </p>
+          <p class="hint">
+            チャンネルごとに 1 つの会話ができ、一覧の先頭に並びます。返事は
+            この画面と同じ経路で作られるので、ツールもコマンドも動きます。
+            メンションできる相手は誰でも依頼でき、走っている生成は
+            <span class="mono">/stop</span> で誰でも止められます。
+          </p>
         </fieldset>
 
         <fieldset>

@@ -74,7 +74,11 @@ func run() error {
 		Prov:        newProvider(cfg.OllamaBaseURL),
 		NewProvider: newProvider,
 		Assets:      web.Assets(),
+		Log:         log.Printf,
 	})
+	// 待ち受け以外の常駐 (Discord) をここで始める。設定で無効なら何もしない。
+	srv.Start()
+	defer srv.Close()
 
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
@@ -188,6 +192,13 @@ func report(cfg *config.Config, agents *agent.Set, skills *skillreg.Registry, ad
 		cfg.WorkspaceDir, config.SeriesDir)
 	fmt.Printf("  エージェント    %d 件\n", len(agents.List()))
 	fmt.Printf("  スキル          %d 件\n", len(skills.List()))
+	if cfg.Discord.Enabled {
+		state := "トークン未設定"
+		if cfg.Discord.Ready() {
+			state = "接続を試みます"
+		}
+		fmt.Printf("  Discord       %s\n", state)
+	}
 
 	for _, e := range agents.Errors() {
 		fmt.Printf("  ! エージェント %s: %s\n", e.Path, e.Reason)

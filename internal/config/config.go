@@ -55,9 +55,27 @@ type Config struct {
 	// SearchAPIKey は鍵の要る取得元へ渡す鍵。
 	SearchAPIKey string `json:"search_api_key"`
 
+	// Discord は Discord 連携の設定 (#617204)。
+	Discord Discord `json:"discord"`
+
 	// path は読み込み元。保存時に使う。設定ファイル自体には書き出さない。
 	path string `json:"-"`
 }
+
+// Discord は Discord 連携の設定。
+//
+// 反応する範囲を絞る項目は持たない。ボットは招待された場所にしか居ないので、
+// 招待の管理がその役割を果たす (#617204)。
+type Discord struct {
+	// Enabled が真のとき Gateway へ接続する。トークンを消さずに止められる
+	// ようにするため、有効かどうかはトークンと別に持つ。
+	Enabled bool `json:"enabled"`
+	// Token はボットのトークン。設定ファイルには平文で載る。
+	Token string `json:"token"`
+}
+
+// Ready は接続を試みてよいかを返す。
+func (d Discord) Ready() bool { return d.Enabled && strings.TrimSpace(d.Token) != "" }
 
 // DefaultPath は設定ファイルの既定の位置を返す。
 func DefaultPath() string {

@@ -60,13 +60,23 @@ export function bucket(iso, now = new Date()) {
   return BUCKETS[3]
 }
 
-/** 並びを区分ごとのまとまりへ分ける。空の区分は落とす。 */
+/**
+ * 並びを区分ごとのまとまりへ分ける。空の区分は落とす。
+ *
+ * Discord から来た会話は日付ではなく出自でまとめ、先頭に固定する。場所に
+ * 結び付いた会話なので、最後に喋った日付で探すことにはならない。
+ */
 export function byBucket(sessions, now = new Date()) {
+  const pinned = []
+  const rest = []
+  for (const s of sessions ?? []) (s.source === 'discord' ? pinned : rest).push(s)
+
   const out = []
-  for (const s of sessions ?? []) {
+  if (pinned.length) out.push({ label: 'Discord', items: pinned, pinned: true })
+  for (const s of rest) {
     const label = bucket(s.updated_at, now)
     const last = out[out.length - 1]
-    if (last && last.label === label) last.items.push(s)
+    if (last && !last.pinned && last.label === label) last.items.push(s)
     else out.push({ label, items: [s] })
   }
   return out

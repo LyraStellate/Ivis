@@ -4,6 +4,9 @@
 
   let {
     disabled = false,
+    // reason は送れない理由。ただ押せなくすると、壊れているのか、そういう
+    // ものなのかが分からない。
+    reason = '',
     busy = false,
     agents = [],
     agentId = '',
@@ -85,7 +88,7 @@
       onkeydown={onKeydown}
       rows="1"
       {disabled}
-      placeholder={busy ? '次のメッセージを書いておけます' : 'メッセージを入力'}
+      placeholder={reason || (busy ? '次のメッセージを書いておけます' : 'メッセージを入力')}
       aria-label="メッセージ"
     ></textarea>
     <div class="bar">
@@ -108,7 +111,7 @@
       <Gauge tokens={usage?.tokens ?? 0} limit={usage?.limit ?? 0} />
 
       <span class="hint">
-        {busy ? '生成中は送信できません。Esc で中断' : 'Shift + Enter で改行'}
+        {reason || (busy ? '生成中は送信できません。Esc で中断' : 'Shift + Enter で改行')}
       </span>
 
       <!-- 始める操作と止める操作を同じ場所に置く。走っているものを止める

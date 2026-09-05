@@ -41,6 +41,30 @@ describe('byBucket', () => {
     expect(byBucket([], new Date())).toEqual([])
     expect(byBucket(undefined, new Date())).toEqual([])
   })
+
+  it('Discord の会話を先頭へ固定する', () => {
+    const now = new Date('2026-09-05T12:00:00')
+    const groups = byBucket(
+      [
+        { id: 'a', updated_at: '2026-09-05T11:00:00' },
+        { id: 'b', updated_at: '2026-08-01T09:00:00', source: 'discord' },
+        { id: 'c', updated_at: '2026-09-04T09:00:00' },
+      ],
+      now,
+    )
+
+    // 場所に結び付いた会話なので、最後に喋った日付で探すことにはならない。
+    expect(groups[0].label).toBe('Discord')
+    expect(groups[0].items.map((s) => s.id)).toEqual(['b'])
+    // 残りは今まで通り日付で分かれる。
+    expect(groups.slice(1).map((g) => g.label)).toEqual(['今日', '昨日'])
+  })
+
+  it('Discord が無ければ区分を作らない', () => {
+    const now = new Date('2026-09-05T12:00:00')
+    const groups = byBucket([{ id: 'a', updated_at: '2026-09-05T11:00:00' }], now)
+    expect(groups.map((g) => g.label)).toEqual(['今日'])
+  })
 })
 
 describe('summarizeArgs', () => {

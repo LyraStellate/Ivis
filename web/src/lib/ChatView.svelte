@@ -16,6 +16,10 @@
   const missingAgent = $derived(session != null && agent == null)
   const providerDown = $derived(status != null && !status.provider_ok)
 
+  // Discord の会話は画面からは進まない。送れても、その内容はチャンネルに
+  // 出ないので、次にそこで話す人は知らない文脈の続きを読むことになる。
+  const fromDiscord = $derived(session?.source === 'discord')
+
   // 続けて同じ話し手が話す間は名前を出し直さない。誰の作業かは色で示す。
   const itemLeads = $derived(leads(items))
   const itemOwners = $derived(owners(items))
@@ -107,7 +111,8 @@
 {/if}
 
 <Composer
-  disabled={missingAgent}
+  disabled={missingAgent || fromDiscord}
+  reason={fromDiscord ? 'この会話は Discord から進みます。ここからは読むだけです' : ''}
   {busy}
   {agents}
   agentId={session?.agent_id ?? ''}

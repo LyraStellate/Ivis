@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -135,5 +136,105 @@ func TestRewindClearsUsage(t *testing.T) {
 	got, _ = st.GetSession(ctx, sess.ID)
 	if got.ContextTokens != 0 || got.ContextLimit != 0 {
 		t.Errorf("使用量が残っています: %+v", got)
+	}
+}
+
+func TestChannelSessionIsUniquePerChannel(t *testing.T) {
+	st := open(t)
+	ctx := context.Background()
+
+	sess, err := st.CreateChannelSession(ctx, "general", "#dev", "c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.Source != SourceDiscord || sess.ChannelID != "c1" {
+		t.Fatalf("出自が残っていない: %+v", sess)
+	}
+
+	got, err := st.SessionByChannel(ctx, "c1")
+	if err != nil || got.ID != sess.ID {
+		t.Fatalf("チャンネルから引けない: %v %+v", err, got)
+	}
+
+	// 同じチャンネルに 2 本目を作らせない。作れると、同じ場所の会話が
+	// 分かれて、どちらに続きが積まれるか決まらなくなる。
+	if _, err := st.CreateChannelSession(ctx, "general", "#dev", "c1"); err == nil {
+		t.Fatal("同じチャンネルで 2 本目ができた")
+	}
+}
+
+func TestWebSessionsHaveNoChannel(t *testing.T) {
+	st := open(t)
+	ctx := context.Background()
+
+	// 空のチャンネル ID はいくつでも並ぶ。索引が空を除いていないと、
+	// 2 本目の Web 会話が作れなくなる。
+	for i := 0; i < 3; i++ {
+		s, err := st.CreateSession(ctx, "general", "会話")
+		if err != nil {
+			t.Fatalf("%d 本目で失敗した: %v", i, err)
+		}
+		if s.Source != SourceWeb || s.ChannelID != "" {
+			t.Fatalf("Web の会話に出自が付いている: %+v", s)
+		}
+	}
+}
+
+func TestSessionByChannelMissing(t *testing.T) {
+	st := open(t)
+	if _, err := st.SessionByChannel(context.Background(), "なし"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("見つからないときに %v", err)
+	}
+}
+
+// oldSchema は source と channel_id を持たなかった頃のセッション表。
+const oldSchema = `
+CREATE TABLE sessions (
+  id             TEXT PRIMARY KEY,
+  title          TEXT NOT NULL,
+  agent_id       TEXT NOT NULL,
+  context_tokens INTEGER NOT NULL DEFAULT 0,
+  context_limit  INTEGER NOT NULL DEFAULT 0,
+  created_at     INTEGER NOT NULL,
+  updated_at     INTEGER NOT NULL
+);`
+
+func TestOpenUpgradesExistingDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+
+	// 既にあるデータベースには CREATE TABLE の変更が届かない。手元の履歴を
+	// 抱えたまま更新されるので、ここが通らないと会話が読めなくなる。
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(oldSchema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO sessions (id, title, agent_id, created_at, updated_at) VALUES ('s1','昔の会話','general',1,1)`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	st, err := Open(path)
+	if err != nil {
+		t.Fatalf("開けない: %v", err)
+	}
+	defer st.Close()
+
+	sess, err := st.GetSession(context.Background(), "s1")
+	if err != nil {
+		t.Fatalf("前からある会話が読めない: %v", err)
+	}
+	if sess.Title != "昔の会話" {
+		t.Fatalf("中身が変わっている: %+v", sess)
+	}
+	// 既存の会話は Web のものとして扱う。
+	if sess.Source != SourceWeb {
+		t.Fatalf("出自が %q", sess.Source)
+	}
+	if _, err := st.CreateChannelSession(context.Background(), "general", "#dev", "c1"); err != nil {
+		t.Fatalf("更新後に Discord の会話を作れない: %v", err)
 	}
 }

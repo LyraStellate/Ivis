@@ -106,7 +106,7 @@ func (s *Server) handlePatchSession(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	s.cancelRun(id)
+	s.runs.Cancel(id)
 	if err := s.st.DeleteSession(r.Context(), id); err != nil {
 		writeError(w, statusFor(err), err)
 		return
@@ -148,7 +148,7 @@ func (s *Server) handleRewind(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 生成中に履歴を消すと、走っているターンが自分の書き込み先を失う。
-	if s.isRunning(id) {
+	if s.runs.Running(id) {
 		writeError(w, http.StatusConflict, errors.New("生成中は巻き戻せません"))
 		return
 	}

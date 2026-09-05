@@ -26,11 +26,22 @@ var ErrNotFound = errors.New("見つかりません")
 // provider の定数とは別に持つ。
 const RoleDelegate = "delegate"
 
+// 会話の出自。どこから始まった会話かで、できる操作が変わる (#617204)。
+const (
+	SourceWeb     = "web"
+	SourceDiscord = "discord"
+)
+
 // Session は 1 つの会話。エージェント定義が後から削除されても ID は保持し続ける。
 type Session struct {
 	ID      string `json:"id"`
 	Title   string `json:"title"`
 	AgentID string `json:"agent_id"`
+	// Source は会話の出自。既存の会話は web として扱う。
+	Source string `json:"source"`
+	// ChannelID は Discord から始まった会話が対応するチャンネル。
+	// Web の会話では空。空でない値は会話をまたいで一意である。
+	ChannelID string `json:"channel_id,omitempty"`
 	// ContextTokens は直前のターンでモデルへ送った入力のトークン数、
 	// ContextLimit はそのときの文脈長。会話を開き直したときに、生成を待たず
 	// 前回の状態を出せるようにするために持つ。発言ごとに持たないのは、
@@ -75,6 +86,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   id             TEXT PRIMARY KEY,
   title          TEXT NOT NULL,
   agent_id       TEXT NOT NULL,
+  source         TEXT NOT NULL DEFAULT 'web',
+  channel_id     TEXT NOT NULL DEFAULT '',
   context_tokens INTEGER NOT NULL DEFAULT 0,
   context_limit  INTEGER NOT NULL DEFAULT 0,
   created_at     INTEGER NOT NULL,
@@ -101,11 +114,19 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, seq);
 CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
 `
 
+// channelIndex はチャンネルと会話を 1 対 1 に保つ。空を除くのは、Web の
+// 会話がいくらでも空のチャンネル ID を持つためである。
+const channelIndex = `CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_channel
+                        ON sessions(channel_id) WHERE channel_id <> ''`
+
 // migrations は既存のデータベースへ後から加える列。順に試し、失敗は無視する。
 var migrations = []string{
 	`ALTER TABLE messages ADD COLUMN thinking TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE sessions ADD COLUMN context_tokens INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE sessions ADD COLUMN context_limit INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE sessions ADD COLUMN source TEXT NOT NULL DEFAULT 'web'`,
+	`ALTER TABLE sessions ADD COLUMN channel_id TEXT NOT NULL DEFAULT ''`,
+	channelIndex,
 }
 
 // Open はデータベースを開き、必要ならスキーマを作る。
@@ -143,22 +164,40 @@ func NewID() string {
 
 // CreateSession は新しいセッションを作る。
 func (s *Store) CreateSession(ctx context.Context, agentID, title string) (*Session, error) {
+	return s.createSession(ctx, agentID, title, SourceWeb, "")
+}
+
+// CreateChannelSession は Discord のチャンネルに対応する会話を作る。
+//
+// チャンネルとの対応は索引で一意に保たれるので、同じチャンネルで二重に
+// 呼ばれた場合は失敗する。呼ぶ側は引き当ててから作ることになる。
+func (s *Store) CreateChannelSession(ctx context.Context, agentID, title, channelID string) (*Session, error) {
+	if channelID == "" {
+		return nil, errors.New("チャンネルが指定されていません")
+	}
+	return s.createSession(ctx, agentID, title, SourceDiscord, channelID)
+}
+
+func (s *Store) createSession(ctx context.Context, agentID, title, source, channelID string) (*Session, error) {
 	if title == "" {
 		title = "新しい会話"
 	}
 	now := time.Now()
-	sess := &Session{ID: NewID(), Title: title, AgentID: agentID, CreatedAt: now, UpdatedAt: now}
+	sess := &Session{ID: NewID(), Title: title, AgentID: agentID, Source: source,
+		ChannelID: channelID, CreatedAt: now, UpdatedAt: now}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO sessions (id, title, agent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
-		sess.ID, sess.Title, sess.AgentID, now.UnixMilli(), now.UnixMilli())
+		`INSERT INTO sessions (id, title, agent_id, source, channel_id, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		sess.ID, sess.Title, sess.AgentID, sess.Source, sess.ChannelID,
+		now.UnixMilli(), now.UnixMilli())
 	if err != nil {
 		return nil, err
 	}
 	return sess, nil
 }
 
-const sessionColumns = `id, title, agent_id, context_tokens, context_limit,
-                        created_at, updated_at`
+const sessionColumns = `id, title, agent_id, source, channel_id,
+                        context_tokens, context_limit, created_at, updated_at`
 
 // ListSessions は更新の新しい順に一覧を返す。
 func (s *Store) ListSessions(ctx context.Context) ([]*Session, error) {
@@ -173,7 +212,7 @@ func (s *Store) ListSessions(ctx context.Context) ([]*Session, error) {
 	for rows.Next() {
 		var sess Session
 		var created, updated int64
-		if err := rows.Scan(&sess.ID, &sess.Title, &sess.AgentID,
+		if err := rows.Scan(&sess.ID, &sess.Title, &sess.AgentID, &sess.Source, &sess.ChannelID,
 			&sess.ContextTokens, &sess.ContextLimit, &created, &updated); err != nil {
 			return nil, err
 		}
@@ -186,11 +225,24 @@ func (s *Store) ListSessions(ctx context.Context) ([]*Session, error) {
 
 // GetSession は 1 件返す。
 func (s *Store) GetSession(ctx context.Context, id string) (*Session, error) {
+	return s.oneSession(ctx, `WHERE id = ?`, id)
+}
+
+// SessionByChannel は Discord のチャンネルに対応する会話を返す。
+// 対応がなければ ErrNotFound。
+func (s *Store) SessionByChannel(ctx context.Context, channelID string) (*Session, error) {
+	if channelID == "" {
+		return nil, ErrNotFound
+	}
+	return s.oneSession(ctx, `WHERE channel_id = ?`, channelID)
+}
+
+func (s *Store) oneSession(ctx context.Context, where string, arg any) (*Session, error) {
 	var sess Session
 	var created, updated int64
 	err := s.db.QueryRowContext(ctx,
-		`SELECT `+sessionColumns+` FROM sessions WHERE id = ?`, id).
-		Scan(&sess.ID, &sess.Title, &sess.AgentID,
+		`SELECT `+sessionColumns+` FROM sessions `+where, arg).
+		Scan(&sess.ID, &sess.Title, &sess.AgentID, &sess.Source, &sess.ChannelID,
 			&sess.ContextTokens, &sess.ContextLimit, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
