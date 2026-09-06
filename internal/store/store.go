@@ -442,6 +442,28 @@ func (s *Store) SetContextUsage(ctx context.Context, sessionID string, tokens, l
 	return err
 }
 
+// ClearMessages はその会話の発言をすべて消す。会話そのものは残す。
+//
+// 会話ごと消さないのは、Discord のチャンネルに結び付いているためである。
+// 消して作り直すと結び付きが張り直され、そのときに作業ディレクトリも別の
+// 場所になる。話の続きを捨てたいだけの人が、置いたファイルまで失う。
+func (s *Store) ClearMessages(ctx context.Context, sessionID string) (int, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM messages WHERE session_id = ?`, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+
+	// 実測値が無くなったので使用量は不明に戻す。前のターンの値を残すと、
+	// 消したはずの分を数えたままの割合が出る。
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE sessions SET context_tokens = 0, context_limit = 0, updated_at = ? WHERE id = ?`,
+		time.Now().UnixMilli(), sessionID); err != nil {
+		return 0, err
+	}
+	return int(n), nil
+}
+
 // Rewind は指定した利用者の発言と、それ以降の全ての発言を消す。
 // 消した件数と、入力欄へ戻す本文を返す。
 //

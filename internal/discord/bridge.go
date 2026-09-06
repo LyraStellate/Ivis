@@ -94,6 +94,12 @@ func (b *Bridge) serve(ctx context.Context, api API, in incoming) {
 		b.reply(ctx, api, in, "御用でしたら、続けて内容を書いてください。")
 		return
 	}
+	// コマンドかどうかを先に見る。エージェントへ流してから判断させると、
+	// 止めたいときに、止めてほしいという依頼が生成の順番待ちに並ぶ。
+	if name, arg, ok := parseCommand(text); ok {
+		b.reply(ctx, api, in, b.runCommand(ctx, in, name, arg))
+		return
+	}
 
 	sess, err := b.session(ctx, api, in)
 	if err != nil {

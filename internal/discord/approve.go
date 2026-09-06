@@ -197,21 +197,15 @@ func (b *Bridge) resolve(id string, approved bool, presser string) (accepted boo
 	return true, true
 }
 
-// StopCommand は生成を打ち切るスラッシュコマンドの名前。
-const StopCommand = "stop"
-
-// stop はそのチャンネルで走っているターンを打ち切る。
+// stopSession はその会話で走っているターンを打ち切る。
 //
 // 使える相手を絞らないのは、止めることが誰にとっても安全だからである。
 // 承認は実行を通す操作なので本人に限るが、暴走を止める操作までその場に
 // 居合わせた人ができないと、緊急停止の役に立たない。
-func (b *Bridge) stop(ctx context.Context, channelID string) bool {
-	sess, err := b.deps.Store.SessionByChannel(ctx, channelID)
-	if err != nil {
-		return false
-	}
-	if !b.Owns(sess.ID) {
-		return false
-	}
-	return b.deps.Runs.Cancel(sess.ID)
+//
+// どちらの入口から始まったターンかも問わない。走っていないと答えるべき
+// 場面と、こちらの都合で止められない場面を同じ返事にすると、打った人には
+// 効かない理由が分からない。
+func (b *Bridge) stopSession(sessionID string) bool {
+	return b.deps.Runs.Cancel(sessionID)
 }

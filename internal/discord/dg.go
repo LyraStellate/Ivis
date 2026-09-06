@@ -62,12 +62,6 @@ func (b *Bridge) start(token string) error {
 	ses.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		b.onInteraction(s, i)
 	})
-	// 参加しているサーバーごとに登録する。全体へ登録すると反映まで待たされる
-	// ことがあり、入れた直後に止められないのでは緊急停止の意味がない。
-	ses.AddHandler(func(s *discordgo.Session, g *discordgo.GuildCreate) {
-		b.registerStop(s, g.ID)
-	})
-
 	if err := ses.Open(); err != nil {
 		return err
 	}
@@ -102,27 +96,6 @@ func (b *Bridge) Stop() {
 	b.mu.Unlock()
 	if c != nil {
 		_ = c.ses.Close()
-	}
-}
-
-// registerStop は打ち切りのコマンドをそのサーバーへ登録する。
-//
-// ボットの招待に applications.commands の権限が要る。無ければここで失敗
-// するので、理由をそのまま残す。
-func (b *Bridge) registerStop(s *discordgo.Session, guildID string) {
-	app := ""
-	if s.State != nil && s.State.User != nil {
-		app = s.State.User.ID
-	}
-	if app == "" {
-		return
-	}
-	_, err := s.ApplicationCommandCreate(app, guildID, &discordgo.ApplicationCommand{
-		Name:        StopCommand,
-		Description: "このチャンネルで走っている生成を止めます",
-	})
-	if err != nil {
-		b.deps.Log("discord: /%s を登録できませんでした (%s): %v", StopCommand, guildID, err)
 	}
 }
 
@@ -170,19 +143,11 @@ func displayName(m *discordgo.MessageCreate) string {
 	return m.Author.Username
 }
 
-// onInteraction は承認のボタンと、打ち切りのコマンドを受ける。
+// onInteraction は承認のボタンを受ける。
+//
+// コマンドはここへ来ない。呼びかけの本文で見分けるので、Discord 側へ登録
+// するものは押しボタンだけである。
 func (b *Bridge) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	if i.Type == discordgo.InteractionApplicationCommand {
-		if i.ApplicationCommandData().Name != StopCommand {
-			return
-		}
-		if b.stop(context.Background(), i.ChannelID) {
-			ephemeral(s, i, "止めました。")
-		} else {
-			ephemeral(s, i, "このチャンネルで走っているものはありません。")
-		}
-		return
-	}
 	if i.Type != discordgo.InteractionMessageComponent {
 		return
 	}

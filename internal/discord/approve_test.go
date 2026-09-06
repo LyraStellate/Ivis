@@ -133,36 +133,6 @@ func TestApprovalUnknownIsReported(t *testing.T) {
 	}
 }
 
-func TestStopCancelsTheRunInThatChannel(t *testing.T) {
-	h := newHarness(t)
-	ctx := context.Background()
-
-	// 走っている状態を作る。コマンドはチャンネルからしか会話を知れない。
-	h.b.serve(ctx, h.api, mention("なにか"))
-	sess, err := h.st.SessionByChannel(ctx, "c1")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	stopped := false
-	h.runs.Begin(sess.ID, func() { stopped = true })
-	defer h.runs.End(sess.ID)
-	h.b.enter(sess.ID, "u1", newRun(h.api, "c1", "m", h.b.nameFor, time.Now))
-	defer h.b.leave(sess.ID)
-
-	// 止めるのは誰にとっても安全なので、使える相手を絞らない。承認と違い、
-	// その場に居合わせた人が止められないと緊急停止の役に立たない。
-	if !h.b.stop(ctx, "c1") {
-		t.Fatal("止められない")
-	}
-	if !stopped {
-		t.Fatal("中断が呼ばれていない")
-	}
-	if h.b.stop(ctx, "そんなチャンネル") {
-		t.Fatal("知らないチャンネルを止めたことになっている")
-	}
-}
-
 func TestOwnsOnlyWhileRunning(t *testing.T) {
 	h := newHarness(t)
 	if h.b.Owns("s1") {
