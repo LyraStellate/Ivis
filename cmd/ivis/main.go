@@ -80,9 +80,9 @@ func run() error {
 	srv.Start()
 	defer srv.Close()
 
-	ln, err := net.Listen("tcp", cfg.Listen)
+	ln, err := listenOn(cfg.Listen, *listen != "")
 	if err != nil {
-		return fmt.Errorf("待ち受けを開始できませんでした (%s): %w", cfg.Listen, err)
+		return err
 	}
 
 	report(cfg, agents, skills, ln.Addr().String())
@@ -107,6 +107,46 @@ func run() error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return httpSrv.Shutdown(shutdownCtx)
+}
+
+// listenOn は待ち受けを開く。設定の宛先へ束ねられないときは、ループバックへ
+// 退いてでも起動する。
+//
+// 届かない宛先が設定に残ると、それを直すための画面ごと開けなくなる。VPN の
+// アドレスを書いておけば、VPN が上がっていないだけで起動できない。設定を直す
+// 手段が設定の中にある以上、ここで死ぬわけにはいかない。
+//
+// 命令行で渡されたときは退かない。利用者が今まさに選んだ宛先を、黙って別の
+// 場所へ束ね替えるべきではない。
+func listenOn(addr string, fromFlag bool) (net.Listener, error) {
+	ln, err := net.Listen("tcp", addr)
+	if err == nil {
+		return ln, nil
+	}
+	failed := fmt.Errorf("待ち受けを開始できませんでした (%s): %w", addr, err)
+	if fromFlag {
+		return nil, failed
+	}
+
+	// 番号はそのまま持っていく。届かないのは宛先であって、どの番号で待つかは
+	// 利用者が決めたことである。
+	fallback := config.Default().Listen
+	if _, port, splitErr := net.SplitHostPort(addr); splitErr == nil && port != "" {
+		fallback = net.JoinHostPort("127.0.0.1", port)
+	}
+	if fallback == addr {
+		return nil, failed
+	}
+	alt, altErr := net.Listen("tcp", fallback)
+	if altErr != nil {
+		return nil, failed
+	}
+
+	fmt.Fprintf(os.Stderr,
+		"警告: 設定の待ち受けアドレス (%s) へ束ねられませんでした: %v\n"+
+			"      %s で起動します。設定画面から直してください。\n",
+		addr, err, fallback)
+	return alt, nil
 }
 
 // printAddresses は開くべき URL を出す。
