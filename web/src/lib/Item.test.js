@@ -150,3 +150,45 @@ describe('推論の開閉', () => {
     unmount(app)
   })
 })
+
+// モデルが道具の引数 (write_file の中身など) を書いている間、提供元は何も
+// 送ってこない。空の吹き出しだけが残ると、止まったのか書いている途中なのかを
+// 見分けられない。
+describe('走っている道具の経過', () => {
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  // 終わってから所要時間を出すだけだと、走っている間は進んでいるのかどうかが
+  // 分からない。
+  it('走っている間は数える', async () => {
+    const { target, app } = await render({
+      id: 't1', kind: 'tool', status: 'running', tool: 'write_file',
+      args: { path: 'a.md' }, result: '', startedAt: Date.now() - 3000,
+    })
+    expect(target.querySelector('.ms.running')?.textContent).toBe('3s')
+    unmount(app)
+  })
+
+  // 承認や回答を待った分は所要時間に混ぜない。startedAt を落としてあるので、
+  // そこを数え始めてはならない。
+  it('承認待ちの間は数えない', async () => {
+    const { target, app } = await render({
+      id: 't2', kind: 'tool', status: 'awaiting', tool: 'run_command',
+      args: { command: 'ls' }, result: '', startedAt: 0, approvalId: 'a1',
+    })
+    expect(target.querySelector('.ms')).toBe(null)
+    unmount(app)
+  })
+
+  // 数えるのは道具だけ。発言にも付けると、待つ場面すべてに数字が並ぶ。
+  it('発言には付けない', async () => {
+    const { target, app } = await render({
+      id: 'm1', kind: 'agent', status: 'streaming', agentId: 'general',
+      thinking: '', text: '', error: '', time: new Date().toISOString(),
+    })
+    expect(target.querySelector('.tnum.running')).toBe(null)
+    expect(target.textContent).not.toContain('生成しています')
+    unmount(app)
+  })
+})

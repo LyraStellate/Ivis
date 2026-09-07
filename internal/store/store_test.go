@@ -114,7 +114,7 @@ func TestRewindRejectsOtherSession(t *testing.T) {
 	}
 }
 
-// 巻き戻すと文脈使用量は不明に戻る。前のターンの値を残すと、消したはずの
+// 巻き戻すとコンテキスト使用量は不明に戻る。前のターンの値を残すと、消したはずの
 // 分を数えたままの割合が出る。
 func TestRewindClearsUsage(t *testing.T) {
 	ctx := context.Background()
@@ -236,5 +236,58 @@ func TestOpenUpgradesExistingDatabase(t *testing.T) {
 	}
 	if _, err := st.CreateChannelSession(context.Background(), "general", "#dev", "c1"); err != nil {
 		t.Fatalf("更新後に Discord の会話を作れない: %v", err)
+	}
+}
+
+// 圧縮したあと、モデルへ渡すのは最後の要約とそれ以降だけ。元の発言は消さない
+// ので、画面と巻き戻しからは従来どおり全件見える (#486237)。
+func TestConversationStartsAtTheLastSummary(t *testing.T) {
+	ctx := context.Background()
+	st := open(t)
+	sess, err := st.CreateSession(ctx, "main", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	add(t, st, sess.ID, "", provider.RoleUser, "ひとつめ", "main")
+	add(t, st, sess.ID, "", provider.RoleAssistant, "はい", "main")
+
+	// 要約が無いうちは全件。
+	input, err := st.ConversationMessages(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(input) != 2 {
+		t.Fatalf("入力が %d 件。要約が無ければ全件のはず", len(input))
+	}
+
+	add(t, st, sess.ID, "", RoleSummary, "これまでの経過", "main")
+	add(t, st, sess.ID, "", provider.RoleUser, "ふたつめ", "main")
+
+	input, err = st.ConversationMessages(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(input) != 2 || input[0].Role != RoleSummary || input[1].Content != "ふたつめ" {
+		t.Fatalf("入力が %d 件で先頭が %q", len(input), input[0].Role)
+	}
+
+	// 2 つめの要約ができたら、そこから後ろだけになる。
+	add(t, st, sess.ID, "", RoleSummary, "まとめ直し", "main")
+	input, err = st.ConversationMessages(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(input) != 1 || input[0].Content != "まとめ直し" {
+		t.Fatalf("入力が %d 件。最後の要約 1 件のはず", len(input))
+	}
+
+	// 画面には全部残っている。
+	all, err := st.ListMessages(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 5 {
+		t.Fatalf("履歴が %d 件。消してはならない", len(all))
 	}
 }

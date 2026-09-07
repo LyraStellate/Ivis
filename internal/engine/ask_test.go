@@ -149,7 +149,7 @@ func TestSystemPromptStatesHowToProceed(t *testing.T) {
 	main, _ := f.eng.Agents.Get("main")
 	child, _ := f.eng.Agents.Get("child")
 
-	withAsk := systemPrompt(main, nil, nil, "/w", time.Now())
+	withAsk := systemPrompt(main, nil, nil, "/w", time.Now(), "")
 	if !strings.Contains(withAsk, "ask_user") {
 		t.Error("問える相手にその手段が示されていない")
 	}
@@ -157,7 +157,7 @@ func TestSystemPromptStatesHowToProceed(t *testing.T) {
 		t.Error("やり切ることが指示文に無い")
 	}
 
-	noAsk := systemPrompt(child, nil, nil, "/w", time.Now())
+	noAsk := systemPrompt(child, nil, nil, "/w", time.Now(), "")
 	if strings.Contains(noAsk, "ask_user") {
 		t.Error("使えない道具を勧めている")
 	}

@@ -42,7 +42,7 @@ func (m *mockProvider) Chat(ctx context.Context, req provider.Request) (<-chan p
 func (m *mockProvider) Models(ctx context.Context) ([]provider.Model, error) { return nil, nil }
 func (m *mockProvider) Health(ctx context.Context) error                     { return nil }
 
-// ctxLen は文脈長として返す値。0 なら「分からない」を表す。
+// ctxLen はコンテキスト長として返す値。0 なら「分からない」を表す。
 func (m *mockProvider) ContextLength(ctx context.Context, model string) (int, error) {
 	return m.ctxLen, nil
 }
@@ -63,7 +63,14 @@ type fixture struct {
 	store  *store.Store
 	cfg    *config.Config
 	events []Event
+	// agentsDir と agents は、試験の中で定義を足すためのもの。定義は
+	// ファイルが正なので、足すときも同じ経路を通す。
+	agentsDir string
+	agents    *agent.Set
 }
+
+// reload は書き足した定義を読み直す。
+func (f *fixture) reload() { f.agents.Load([]string{f.agentsDir}) }
 
 func (f *fixture) emit(ev Event) { f.events = append(f.events, ev) }
 
@@ -161,7 +168,7 @@ func newFixture(t *testing.T, script func(n int, req provider.Request) []provide
 	cfg.RequireApproval = false
 
 	mock := &mockProvider{script: script}
-	f := &fixture{mock: mock, store: st, cfg: cfg}
+	f := &fixture{mock: mock, store: st, cfg: cfg, agentsDir: agentsDir, agents: agents}
 	f.eng = &Engine{
 		Cfg:      cfg,
 		Store:    st,

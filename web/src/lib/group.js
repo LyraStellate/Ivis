@@ -10,6 +10,10 @@ export function speaker(item) {
   if (!item) return null
   if (item.kind === 'user') return 'user'
   if (item.kind === 'agent') return 'agent:' + (item.agentId ?? '')
+  // チームのメッセージは、送り手と宛先の組でひとまとまりとする。同じ人が
+  // 続けて別の相手へ送ることがあり、そこで名前を出し直さないと、誰宛ての
+  // 話がどこで切り替わったのか読めない (#640275)。
+  if (item.kind === 'team') return 'team:' + (item.agentId ?? '') + '>' + (item.to ?? '')
   return null
 }
 

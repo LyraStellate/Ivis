@@ -4,7 +4,7 @@
 //
 // 項目の形:
 //   { id, kind, status, ... }
-//   kind   'user' | 'agent' | 'tool' | 'delegate' | 'notice'
+//   kind   'user' | 'agent' | 'tool' | 'delegate' | 'summary' | 'notice' | 'team'
 //   status 'streaming' | 'running' | 'awaiting' | 'done' | 'error' | 'denied' | 'stopped'
 
 /** ツールの結果から成否を読み取る。 */
@@ -39,6 +39,19 @@ function findById(list, id) {
   return null
 }
 
+/** 入れ子の中まで見て、条件に合う最初の項目を返す。 */
+function findDeep(list, hit) {
+  for (let i = list.length - 1; i >= 0; i--) {
+    const it = list[i]
+    if (hit(it)) return it
+    if (it.children) {
+      const found = findDeep(it.children, hit)
+      if (found) return found
+    }
+  }
+  return null
+}
+
 /** 同じ親を持つ発言の並びを、表示用の項目へ組み立てる。 */
 function buildGroup(byParent, key) {
   const out = []
@@ -68,6 +81,35 @@ function buildGroup(byParent, key) {
             time: m.created_at,
           })
         }
+        break
+
+      // 圧縮の区切り。ここより前はモデルへ渡らないが、画面には残る。どこで
+      // 切り替わったのかが見えないと、答えが変わった理由が読めない。
+      case 'summary':
+        out.push({
+          id: m.id,
+          kind: 'summary',
+          status: 'done',
+          agentId: m.agent_id,
+          text: m.content,
+          time: m.created_at,
+        })
+        break
+
+      // チームのメッセージ。宛先と 3 つの内訳を持つ (#640275)。
+      case 'team':
+        out.push({
+          id: m.id,
+          kind: 'team',
+          status: 'done',
+          agentId: m.agent_id,
+          to: m.to_agent_id,
+          why: m.why ?? '',
+          did: m.did ?? '',
+          decision: m.decision ?? '',
+          text: m.content,
+          time: m.created_at,
+        })
         break
 
       case 'delegate':
@@ -186,6 +228,24 @@ export class Transcript {
 
   containerAt(depth) {
     return this.containers[depth] ?? this.items
+  }
+
+  /**
+   * 返事を返したことを、その場で画面へ反映する。
+   *
+   * 許可も答えも別の要求で送るため、経過のストリームには何も現れない。走り
+   * 出したことは結果が返るまで誰も知らせてくれず、待っている間ずっと「承認待ち」
+   * のまま止まって見える。ここで進めておく。
+   *
+   * 時計はこの瞬間から始める。待たせた分は道具の所要時間ではない。
+   */
+  responded(id) {
+    const it = findDeep(this.items, (x) => x.approvalId === id || x.questionId === id)
+    if (!it) return
+    it.approvalId = ''
+    it.questionId = ''
+    it.status = 'running'
+    it.startedAt = Date.now()
   }
 
   /** ストリームのイベントを 1 件反映する。 */
@@ -316,6 +376,34 @@ export class Transcript {
         this.containers.length = depth + 1
         break
       }
+
+      // メンバーが送った 1 通。手番の切り替わりはこれで見える。
+      case 'team_message':
+        this.items.push({
+          id: ev.message_id,
+          kind: 'team',
+          status: 'done',
+          agentId: ev.agent_id,
+          to: ev.to,
+          relation: ev.relation ?? '',
+          decision: ev.decision ?? '',
+          why: ev.why ?? '',
+          did: ev.did ?? '',
+          text: ev.text ?? '',
+          time: new Date().toISOString(),
+        })
+        break
+
+      // 手番の入れ替わり。会話の項目は増やさない。誰が動いているかは末尾の
+      // 待っている行が出す。ここで行を足すと、送ったメッセージと二重になる。
+      case 'turn_start':
+      case 'turn_end':
+        break
+
+      // 失敗ではない知らせ。圧縮したことなど、会話の見え方が変わったこと。
+      case 'notice':
+        box.push({ id: localId('notice'), kind: 'notice', status: 'done', text: ev.text ?? '' })
+        break
 
       case 'error': {
         const it = findById(box, ev.message_id)

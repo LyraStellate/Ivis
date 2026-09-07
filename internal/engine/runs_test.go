@@ -54,7 +54,7 @@ func TestRunsEndReleasesContext(t *testing.T) {
 	stopped := false
 	r.Begin("s1", func() { stopped = true })
 	r.End("s1")
-	// 途中で抜けた場合に文脈が漏れ続けないよう、終了でも中断を呼ぶ。
+	// 途中で抜けた場合に中断が呼ばれないまま残らないよう、終了でも中断を呼ぶ。
 	if !stopped {
 		t.Fatal("終了で中断関数が呼ばれていない")
 	}

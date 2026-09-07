@@ -71,3 +71,22 @@ describe('copyOf', () => {
     expect(c.memory).toBe(true)
   })
 })
+
+// セッション固有の定義は Tier 0 を持てる。共通で 0 を規定エージェントだけに
+// 絞っているのは、会話の入口が 2 つある状態を作れないようにするためで、
+// チームの入口は窓口として会話が明示して持つ (#731906)。
+describe('チームの固有エージェント', () => {
+  const at = (tier) => ({ ...blank('m'), id: 'peer', tier })
+
+  it('共通では Tier 0 を断る', () => {
+    expect(check(at(0))?.field).toBe('tier')
+  })
+
+  it('会話の中では Tier 0 を通す', () => {
+    expect(check(at(0), [], { local: true })).toBeNull()
+  })
+
+  it('負の Tier はどちらでも断る', () => {
+    expect(check(at(-1), [], { local: true })?.field).toBe('tier')
+  })
+})

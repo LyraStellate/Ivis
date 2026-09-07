@@ -49,7 +49,7 @@ type Agent struct {
 	// Skills は利用可能とするスキル名。"*" ですべて。
 	Skills []string `json:"skills"`
 	// Memory は委譲されたときに、同じセッション内での前回のやり取りを
-	// 引き継ぐか。false なら毎回まっさらな文脈で始まる。
+	// 引き継ぐか。false なら毎回まっさらなコンテキストで始まる。
 	Memory bool `json:"memory"`
 	// Thinking はモデルの推論機能を使うか。対応しないモデルでは失敗する。
 	Thinking bool `json:"thinking"`
@@ -111,29 +111,18 @@ func (s *Set) Load(paths []string) {
 	var errs []LoadError
 
 	for _, root := range paths {
-		entries, err := os.ReadDir(root)
-		if err != nil {
-			continue // 未作成の探索パスは異常ではない
-		}
-		names := make([]string, 0, len(entries))
-		for _, e := range entries {
-			if e.IsDir() || !strings.EqualFold(filepath.Ext(e.Name()), ".json") {
-				continue
-			}
-			names = append(names, e.Name())
-		}
-		sort.Strings(names)
-
-		for _, n := range names {
-			p := filepath.Join(root, n)
-			a, err := parse(p)
-			if err != nil {
-				errs = append(errs, LoadError{Path: p, Reason: err.Error()})
-				continue
+		found, loadErrs := ReadDir(root)
+		errs = append(errs, loadErrs...)
+		for _, a := range found {
+			// 共通の一覧で Tier 0 を持てるのは規定エージェントだけである。
+			// 入口が 2 つある状態を、定義を手で書き換えて作れないようにする
+			// ため (#528664)。会話の中の名簿にはこの制限は無い。
+			if !a.Fixed && a.Tier < MinUserTier {
+				a.Tier = MinUserTier
 			}
 			if prev, ok := agents[a.ID]; ok {
 				errs = append(errs, LoadError{
-					Path:   p,
+					Path:   a.File,
 					Reason: fmt.Sprintf("エージェント ID %q が %s と重複しています", a.ID, prev.File),
 				})
 				continue
@@ -148,6 +137,44 @@ func (s *Set) Load(paths []string) {
 	s.agents, s.order, s.errs = agents, order, errs
 	s.mu.Unlock()
 }
+
+// ReadDir は 1 つのディレクトリの定義を ID 順に読む。読めなかったものは
+// 失敗として返し、残りは通す。1 つ壊れただけで手元の定義が全部読めなくなる
+// 事態を避けるためで、この扱いは共通の探索パスでもセッション固有の置き場
+// (#731906) でも同じである。
+//
+// ディレクトリが無いことは失敗ではない。まだ誰も作っていないだけである。
+func ReadDir(root string) ([]*Agent, []LoadError) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, nil
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || !strings.EqualFold(filepath.Ext(e.Name()), ".json") {
+			continue
+		}
+		names = append(names, e.Name())
+	}
+	sort.Strings(names)
+
+	var out []*Agent
+	var errs []LoadError
+	for _, n := range names {
+		p := filepath.Join(root, n)
+		a, err := parse(p)
+		if err != nil {
+			errs = append(errs, LoadError{Path: p, Reason: err.Error()})
+			continue
+		}
+		out = append(out, a)
+	}
+	return out, errs
+}
+
+// SortIDs は Tier 順、同じ Tier では ID 順に並べ替える。上位から下位へ読める
+// 並びは、そのまま指示の流れの向きである。
+func SortIDs(order []string, agents map[string]*Agent) { sortIDs(order, agents) }
 
 // sortIDs は Tier 順、同じ Tier では ID 順に並べる。一覧も指示文へ載せる
 // 並びも上位から下位へ読めるようにする。
@@ -245,12 +272,17 @@ func parse(path string) (*Agent, error) {
 	}
 
 	// Tier は省略できる。書かれていなければ規定より 1 つ下として扱う。
+	// 書かれていればその値をそのまま読む。0 を弾くのは共通の一覧の決まりで
+	// あって、ファイルの読み方ではない — セッション固有の定義は 0 を持てる
+	// (#731906)。共通の側の制限は Set.Load が掛ける。
 	a.Tier = MinUserTier
-	if d.Tier != nil && *d.Tier > MinUserTier {
+	if d.Tier != nil {
 		a.Tier = *d.Tier
+		if a.Tier < 0 {
+			a.Tier = 0
+		}
 	}
 	// 規定エージェントの Tier はファイルに何が書いてあっても 0 とする。
-	// 入口が 2 つある状態を、定義を手で書き換えて作れないようにするため。
 	if a.Fixed {
 		a.Tier = 0
 	}

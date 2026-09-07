@@ -103,6 +103,11 @@ func New(d Deps) *Server {
 		Run: func(ctx context.Context, id, text string, emit engine.Emit) error {
 			return s.eng.Run(ctx, id, text, emit)
 		},
+		Compact: func(ctx context.Context, id, instructions string) (*engine.CompactResult, error) {
+			// Discord では経過を出さない。1 文字ごとに投稿を書き換えることに
+			// なり、それは待つ側の役に立たない。
+			return s.eng.Compact(ctx, id, instructions, nil)
+		},
 		Log: d.Log,
 	})
 	return s
@@ -147,6 +152,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/agents/{id}", s.handleDeleteAgent)
 	mux.HandleFunc("GET /api/tools", s.handleTools)
 	mux.HandleFunc("GET /api/skills", s.handleSkills)
+	mux.HandleFunc("GET /api/commands", s.handleCommands)
 	mux.HandleFunc("POST /api/reload", s.handleReload)
 	mux.HandleFunc("GET /api/models", s.handleModels)
 	mux.HandleFunc("GET /api/config", s.handleGetConfig)
@@ -161,6 +167,22 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/sessions/{id}/messages", s.handleSend)
 	mux.HandleFunc("POST /api/sessions/{id}/cancel", s.handleCancel)
 	mux.HandleFunc("POST /api/sessions/{id}/rewind", s.handleRewind)
+
+	// チームセッションの名簿 (#731906)。
+	mux.HandleFunc("GET /api/sessions/{id}/agents", s.handleRoster)
+	mux.HandleFunc("POST /api/sessions/{id}/agents", s.handleCreateSessionAgent)
+	mux.HandleFunc("POST /api/sessions/{id}/agents/copy", s.handleCopyAgent)
+	mux.HandleFunc("PUT /api/sessions/{id}/agents/{aid}", s.handleUpdateSessionAgent)
+	mux.HandleFunc("DELETE /api/sessions/{id}/agents/{aid}", s.handleDeleteSessionAgent)
+	mux.HandleFunc("POST /api/sessions/{id}/members", s.handleJoin)
+
+	// チケット (#189542)。
+	mux.HandleFunc("GET /api/sessions/{id}/tickets", s.handleListTickets)
+	mux.HandleFunc("POST /api/sessions/{id}/tickets", s.handleCreateTicket)
+	mux.HandleFunc("GET /api/sessions/{id}/tickets/{number}", s.handleGetTicket)
+	mux.HandleFunc("PATCH /api/sessions/{id}/tickets/{number}", s.handlePatchTicket)
+	mux.HandleFunc("DELETE /api/sessions/{id}/tickets/{number}", s.handleDeleteTicket)
+	mux.HandleFunc("POST /api/sessions/{id}/tickets/{number}/notes", s.handleAddNote)
 	mux.HandleFunc("POST /api/approvals/{id}", s.handleApproval)
 	mux.HandleFunc("POST /api/questions/{id}", s.handleAnswer)
 
@@ -208,6 +230,8 @@ func statusFor(err error) int {
 	case errors.Is(err, store.ErrNotFound):
 		return http.StatusNotFound
 	case errors.Is(err, store.ErrNotRewindable):
+		return http.StatusBadRequest
+	case errors.Is(err, ErrNotTeam):
 		return http.StatusBadRequest
 	}
 	return http.StatusInternalServerError

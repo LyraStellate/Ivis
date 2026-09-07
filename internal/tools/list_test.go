@@ -10,7 +10,7 @@ func TestRegistryContents(t *testing.T) {
 		tool, _ := r.Get(n)
 		t.Logf("%-18s 承認=%v", n, tool.NeedsApproval())
 	}
-	if len(r.Names()) != 19 {
-		t.Errorf("ツール数 = %d, want 19", len(r.Names()))
+	if len(r.Names()) != 24 {
+		t.Errorf("ツール数 = %d, want 24", len(r.Names()))
 	}
 }

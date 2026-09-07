@@ -8,7 +8,7 @@ import (
 	"github.com/LyraStellate/Ivis/internal/provider"
 )
 
-// 委譲は子の成果だけを親へ返す。子の途中経過は履歴に残るが、親の文脈には入らない。
+// 委譲は子の成果だけを親へ返す。子の途中経過は履歴に残るが、親のコンテキストには入らない。
 func TestDelegateReturnsOnlyChildResult(t *testing.T) {
 	f := newFixture(t, func(n int, req provider.Request) []provider.Event {
 		switch n {
@@ -170,13 +170,13 @@ func TestDelegateMemoryCarriesOver(t *testing.T) {
 	}
 }
 
-// 記憶を切った子は毎回まっさらな文脈で始まる。
+// 記憶を切った子は毎回まっさらなコンテキストで始まる。
 func TestDelegateWithoutMemoryStartsFresh(t *testing.T) {
 	f := twoRounds(t, "child")
 	req := f.mock.reqs[3]
 	for _, m := range req.Messages {
 		if strings.Contains(m.Content, "1 回目") || strings.Contains(m.Content, "覚えました") {
-			t.Errorf("引き継がないはずの文脈が入っています: %q", m.Content)
+			t.Errorf("引き継がないはずのコンテキストが入っています: %q", m.Content)
 		}
 	}
 }

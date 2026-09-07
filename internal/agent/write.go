@@ -45,20 +45,36 @@ func ValidateID(id string) error {
 	return nil
 }
 
-// Validate は保存してよい定義かを返す。
-func Validate(a *Agent) error {
+// Validate は共通の定義として保存してよいかを返す。
+func Validate(a *Agent) error { return validate(a, false) }
+
+// ValidateLocal はセッション固有の定義として保存してよいかを返す。
+//
+// 共通との違いは Tier 0 を許すことだけである。共通で 0 を規定エージェント
+// だけに絞っているのは、会話の入口が 2 つある状態を定義の書き換えで作れない
+// ようにするためだった (#528664)。チームの入口は窓口として会話が明示して
+// 持つので、そこに同じ制限を掛ける理由がない。対等な 2 人組は正当な構成で、
+// 同位どうしは依頼しかできないという規則がそれを支える (#731906)。
+func ValidateLocal(a *Agent) error { return validate(a, true) }
+
+func validate(a *Agent, local bool) error {
 	if err := ValidateID(a.ID); err != nil {
 		return err
 	}
 	if strings.TrimSpace(a.Model) == "" {
 		return &FieldError{Field: "model", Reason: "モデルを選んでください"}
 	}
-	if a.ID == DefaultID {
+	switch {
+	case a.Tier < 0:
+		return &FieldError{Field: "tier", Reason: "Tier に負の数は指定できません"}
+	case local:
+		// 会話の中では 0 も使える。
+	case a.ID == DefaultID:
 		if a.Tier != 0 {
 			return &FieldError{Field: "tier",
 				Reason: "規定エージェントの Tier は 0 で固定です"}
 		}
-	} else if a.Tier < MinUserTier {
+	case a.Tier < MinUserTier:
 		return &FieldError{Field: "tier",
 			Reason: fmt.Sprintf("Tier は %d 以上を指定してください。0 は規定エージェントだけが持てます", MinUserTier)}
 	}
@@ -76,6 +92,19 @@ func Save(dir string, a *Agent) error {
 	if err := Validate(a); err != nil {
 		return err
 	}
+	return writeDef(dir, a)
+}
+
+// SaveLocal はセッション固有の定義を書き出す。書き方は共通と同じで、
+// 通す検証だけが違う。
+func SaveLocal(dir string, a *Agent) error {
+	if err := ValidateLocal(a); err != nil {
+		return err
+	}
+	return writeDef(dir, a)
+}
+
+func writeDef(dir string, a *Agent) error {
 	path := a.File
 	if path == "" {
 		if dir == "" {

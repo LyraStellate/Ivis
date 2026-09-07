@@ -4,8 +4,14 @@
   import { stickToBottom, scrollToBottom } from './stick.js'
   import { leads, owners } from './group.js'
 
+  import { elapsed } from './format.js'
+
   let {
-    session, agents, items, busy, notice, status, railHidden, onToggleRail,
+    session, agents, items, busy, moved = 0, stage = null, commands = [],
+    members = [], leadId = '',
+    // panelHidden は null なら右のパネルそのものが無い会話 (直列)。
+    panelHidden = null, onTogglePanel = null,
+    notice, status, railHidden, onToggleRail,
     onSend, onCancel, onApprove, onAnswer, onAgentChange, onDismiss, onRewind, colorOf, usage,
     draftBack,
   } = $props()
@@ -18,12 +24,33 @@
   const providerDown = $derived(status != null && !status.provider_ok)
 
   // Discord の会話は画面からは進まない。送れても、その内容はチャンネルに
-  // 出ないので、次にそこで話す人は知らない文脈の続きを読むことになる。
+  // 出ないので、次にそこで話す人は知らないやり取りの続きを読むことになる。
   const fromDiscord = $derived(session?.source === 'discord')
 
   // 続けて同じ話し手が話す間は名前を出し直さない。誰の作業かは色で示す。
   const itemLeads = $derived(leads(items))
   const itemOwners = $derived(owners(items))
+
+  // 何も届かない時間が続いていることを、末尾に 1 行だけ出す。
+  //
+  // 無音になる場所は決まっていない。道具を続けて呼ぶ間、次の生成が始まるまで、
+  // モデルが道具の引数を書いている間 — どれも画面に該当する項目が無いか、
+  // あっても空である。発言や道具の行に付けて回るのではなく、届いたかどうかで
+  // 測って 1 か所に出す。動いている間 (ふつうの生成は 1 秒も途切れない) は
+  // 出ない。
+  const QUIET = 2000
+  let now = $state(Date.now())
+  $effect(() => {
+    if (!busy) return
+    now = Date.now()
+    const id = setInterval(() => (now = Date.now()), 1000)
+    return () => clearInterval(id)
+  })
+  // 承認や問いを待っている間は数えない。止まっているのではなく、利用者の番で
+  // ある。そこで秒数を出しても急かしているだけになる。
+  const stalled = $derived(
+    busy && stage != null && moved > 0 && now - moved >= QUIET ? elapsed(now - moved) : '',
+  )
 
   // 上の帯が同じことを伝えている場合は、失敗の通知を重ねて出さない。
   // 同じ内容が 2 か所に出ると、どちらを読めばよいか分からなくなる。
@@ -68,6 +95,26 @@
   {#if session?.workspace}
     <span class="place mono" title={session.workspace}>{session.workspace}</span>
   {/if}
+
+  {#if panelHidden != null}
+    <button
+      class="rail quiet"
+      onclick={onTogglePanel}
+      title={panelHidden ? 'メンバーとチケットを開く' : 'メンバーとチケットを閉じる'}
+      aria-label={panelHidden ? 'メンバーとチケットを開く' : 'メンバーとチケットを閉じる'}
+    >
+      <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
+        <path
+          d={panelHidden ? 'M7.5 2 L3.5 6 L7.5 10' : 'M4.5 2 L8.5 6 L4.5 10'}
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      </svg>
+    </button>
+  {/if}
 </header>
 
 {#if missingAgent}
@@ -103,6 +150,20 @@
         owner={itemOwners[i]}
       />
     {/each}
+
+    {#if stalled}
+      <p class="stalled" role="status">
+        <span class="typing"><i></i><i></i><i></i></span>
+        <span>{stage.label}</span>
+        <!-- 割合は出せない。要約が何文字で終わるかは、書き終わるまで誰にも
+             分からない。分母を作って割ると、進んでいるように見えるだけの
+             数字になる。できた量をそのまま出す。 -->
+        {#if stage.done}
+          <span class="mono tnum">{stage.done.toLocaleString()}{stage.unit ?? ''}</span>
+        {/if}
+        <span class="mono tnum">{stalled}</span>
+      </p>
+    {/if}
   </div>
 </div>
 
@@ -113,6 +174,9 @@
 {/if}
 
 <Composer
+  {commands}
+  {members}
+  {leadId}
   disabled={missingAgent || fromDiscord}
   reason={fromDiscord ? 'この会話は Discord から進みます。ここからは読むだけです' : ''}
   {busy}
@@ -196,6 +260,32 @@
     max-width: 880px;
     margin: 0 auto;
     padding: 16px 14px 24px;
+  }
+
+  /* 止まっている間だけ出る行。発言と同じ重さで置くと、新しい何かが来たように
+     見える。小さく淡く、末尾に添えるだけにする。 */
+  .stalled {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 6px 0 0;
+    padding-left: 13px;
+    color: var(--g9);
+    font-size: 11px;
+  }
+  .typing { display: inline-flex; align-items: center; gap: 3px; }
+  .typing i {
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: var(--fg-muted);
+    animation: blink 1.2s ease-in-out infinite;
+  }
+  .typing i:nth-child(2) { animation-delay: 0.15s; }
+  .typing i:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes blink {
+    0%, 60%, 100% { opacity: 0.25; }
+    30% { opacity: 1; }
   }
 
   .catch-up {

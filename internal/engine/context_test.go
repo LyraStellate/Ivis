@@ -8,7 +8,7 @@ import (
 	"github.com/LyraStellate/Ivis/internal/provider"
 )
 
-// 文脈長を明示しないと、提供元の既定 (Ollama は 4096) で走る。ツールの結果を
+// コンテキスト長を明示しないと、提供元の既定 (Ollama は 4096) で走る。ツールの結果を
 // 往復するだけで埋まり、埋まると古い側から黙って捨てられて指示文ごと失われる。
 // 渡していることを、実際の要求の中身で確かめる。
 func TestRequestCarriesContextLength(t *testing.T) {

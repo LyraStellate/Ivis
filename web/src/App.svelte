@@ -5,6 +5,7 @@
   import Sidebar from './lib/Sidebar.svelte'
   import ChatView from './lib/ChatView.svelte'
   import SettingsPanel from './lib/SettingsPanel.svelte'
+  import TeamPanel from './lib/TeamPanel.svelte'
   import Confirm from './lib/Confirm.svelte'
 
   let status = $state(null)
@@ -23,6 +24,20 @@
   let runningId = $state(null)
   const busy = $derived(runningId != null && runningId === currentId)
 
+  // 使えるコマンド。入力欄が候補を出すのに使う。
+  let commands = $state([])
+
+  // いま何を待っているか。届いたイベントから読み取る。何も届かない時間に
+  // 秒数だけ出しても、それが何の時間なのかは分からない。
+  let stage = $state(null)
+
+  // 最後に何かが届いた時刻。
+  //
+  // 無音は発言の中とは限らない。次の生成が始まるまでの間、道具を続けて呼ぶ間、
+  // 最初の一片が返るまでの間 — いずれも画面には何の項目も無い。届いたかどうか
+  // で測れば、どこで止まっていても同じ 1 か所に出せる。
+  let moved = $state(0)
+
   // 生成中の会話から離れたら、そのターンの続きは画面へ反映しない。戻って
   // きた時点の履歴と、流れ続けるイベントが二重に積まれるのを避けるため。
   // 生成そのものは走り続け、終わったところで履歴を取り直す。
@@ -32,10 +47,21 @@
   let pendingDelete = $state(null)
   let pendingRewind = $state(null)
 
-  // 直前のターンで文脈をどれだけ使ったか。会話を開いた時点では保存された値、
+  // 直前のターンでコンテキストをどれだけ使ったか。会話を開いた時点では保存された値、
   // 生成中は流れてくるイベントで更新する。
   let usage = $state(null)
   let railHidden = $state(false)
+
+  // チームセッションの名簿とチケット。会話を開いたときに取り、手番が回った
+  // あとに取り直す。差分をイベントに載せないのは、載せると同じものを 2 つの
+  // 経路で組み立てることになり、食い違ったときにどちらが正か決められない
+  // からである (#189542)。
+  let roster = $state(null)
+  let tickets = $state([])
+  let models = $state([])
+  let panelHidden = $state(false)
+  const isTeam = $derived(session?.kind === 'team')
+  const members = $derived(roster?.members ?? [])
 
   let controller = null
 
@@ -59,6 +85,7 @@
     status = await guard(api.getStatus)
     agents = (await guard(api.listAgents)) ?? []
     sessions = (await guard(api.listSessions)) ?? []
+    commands = (await guard(api.listCommands)) ?? []
   }
 
   async function openSession(id) {
@@ -71,13 +98,39 @@
     tx.loadHistory(history ?? [])
     usage = usageOf(session)
     notice = null
+    roster = null
+    tickets = []
+    if (session?.kind === 'team') await loadTeam(id)
   }
 
-  async function newSession(agentId) {
-    const created = await guard(() => api.createSession(agentId ?? status?.default_agent))
+  // 名簿とチケットを取り直す。会話をまたいで持ち越さないよう、いま開いて
+  // いる会話のものだけを反映する。
+  async function loadTeam(id) {
+    const [r, t] = await Promise.all([
+      guard(() => api.getRoster(id)),
+      guard(() => api.listTickets(id, { closed: true })),
+    ])
+    if (currentId !== id) return
+    if (r) roster = r
+    if (t) tickets = t
+    if (models.length === 0) models = (await guard(api.listModels)) ?? []
+  }
+
+  async function refreshTickets() {
+    if (!currentId || !isTeam) return
+    const t = await guard(() => api.listTickets(currentId, { closed: true }))
+    if (t) tickets = t
+  }
+
+  async function newSession(agentId, kind) {
+    const created = await guard(() =>
+      api.createSession(agentId ?? status?.default_agent, kind),
+    )
     if (!created) return
     sessions = [created, ...sessions]
     await openSession(created.id)
+    // チームは組んでから話しかけるものなので、右のパネルを開いて始める。
+    if (created.kind === 'team') panelHidden = false
   }
 
   async function removeSession(id) {
@@ -154,11 +207,16 @@
     notice = null
     tx.pushUser(text)
     controller = new AbortController()
+    // 何かが届いた最後の時刻。無音が続いていることを画面が知る唯一の手がかり。
+    moved = Date.now()
+    stage = { label: '返答を待っています' }
 
     try {
       for await (const ev of api.send(sid, text, controller.signal)) {
+        moved = Date.now()
         if (currentId !== sid) detached = true
         if (detached) continue
+        stage = stageOf(ev, stage)
         if (ev.type === 'error' && !ev.message_id) notice = { kind: ev.kind, text: ev.error }
         if (ev.type === 'usage') {
           usage = ev.context_limit ? { tokens: ev.prompt_tokens ?? 0, limit: ev.context_limit } : null
@@ -170,6 +228,7 @@
     } finally {
       runningId = null
       controller = null
+      stage = null
       if (!detached) {
         // 生成中のまま取り残された項目を閉じる。ここで全件を取り直さない。
         tx.settle()
@@ -180,6 +239,8 @@
         sessions = list
         session = list.find((s) => s.id === currentId) ?? session
       }
+      // チケットは手番の中で変わる。ラウンドが終わったところで取り直す。
+      if (!detached && currentId === sid) await refreshTickets()
       // 離れている間に進んだ分は画面に無い。戻っていれば取り直す。
       if (detached && currentId === sid) {
         const history = await guard(() => api.listMessages(sid))
@@ -190,6 +251,46 @@
     }
   }
 
+  // stageOf は届いたイベントから、いま待っているものの名前を決める。
+  //
+  // null は「待っていない」を表す。承認と問いの間は利用者の番であって、
+  // 止まっているわけではない。そこで秒数を数えると急かしているだけになる。
+  function stageOf(ev, prev) {
+    switch (ev.type) {
+      case 'stage':
+        return ev.stage === 'compacting'
+          ? { label: 'やり取りをまとめています', done: ev.done ?? 0, unit: '字' }
+          : { label: '返答を作っています' }
+      case 'approval_request':
+      case 'question':
+        return null
+      // チームの手番。誰の番かと、あと何人待っているかを出す。手番が何度も
+      // 入れ替わる間、画面には長く何も届かない (#640275)。
+      case 'turn_start':
+        return { label: `${ev.agent_id} の番です`, done: ev.queued ?? 0, unit: '件待ち' }
+      case 'turn_end':
+        return { label: '次の相手へ渡しています', done: ev.queued ?? 0, unit: '件待ち' }
+      case 'team_message':
+        return { label: `${ev.to} へ渡しています` }
+      case 'tool_call':
+        return { label: `${ev.tool} を実行しています` }
+      case 'tool_result':
+        return { label: '結果を読んでいます' }
+      case 'delegate_start':
+        return { label: `${ev.agent_id} に任せています` }
+      case 'message_start':
+      case 'delta':
+      case 'thinking':
+        return { label: '書いています' }
+      case 'message_end':
+        return { label: '続きを考えています' }
+      case 'done':
+        return null
+      default:
+        return prev
+    }
+  }
+
   async function cancel() {
     if (runningId == null) return
     const sid = runningId
@@ -197,12 +298,15 @@
     controller?.abort()
   }
 
+  // 返事が届いたら、その場で行を進める。断ったときは結果がすぐ返るので待つ。
   async function approve(approvalId, ok) {
     await guard(() => api.respondApproval(approvalId, ok))
+    if (ok) tx.responded(approvalId)
   }
 
   async function answer(questionId, text) {
     await guard(() => api.respondQuestion(questionId, text))
+    tx.responded(questionId)
   }
 
   async function reload() {
@@ -231,7 +335,7 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="app" class:narrow={railHidden}>
+<div class="app" class:narrow={railHidden} class:teamed={isTeam && !panelHidden}>
   <Sidebar
     {sessions}
     {agents}
@@ -240,6 +344,7 @@
     {runningId}
     onOpen={openSession}
     onNew={newSession}
+    onNewTeam={(a) => newSession(a, 'team')}
     onDelete={(s) => (pendingDelete = s)}
     onReload={reload}
     onSettings={() => (settingsOpen = true)}
@@ -254,6 +359,13 @@
         {agents}
         {items}
         {busy}
+        {moved}
+        {stage}
+        {commands}
+        {members}
+        leadId={roster?.lead_id ?? ''}
+        panelHidden={isTeam ? panelHidden : null}
+        onTogglePanel={() => (panelHidden = !panelHidden)}
         {notice}
         {status}
         {colorOf}
@@ -293,6 +405,18 @@
       </div>
     {/if}
   </main>
+
+  {#if isTeam && !panelHidden && currentId}
+    <TeamPanel
+      sessionId={currentId}
+      {roster}
+      {tickets}
+      {models}
+      {colorOf}
+      onRoster={(r) => (roster = r)}
+      onTickets={refreshTickets}
+    />
+  {/if}
 
   {#if settingsOpen}
     <SettingsPanel
@@ -338,14 +462,21 @@
      中の領域がスクロールせずに入力欄が画面の外へ出る。 */
   .app {
     display: grid;
-    grid-template-columns: 240px minmax(0, 1fr);
+    grid-template-columns: 240px minmax(0, 1fr) 0;
     grid-template-rows: minmax(0, 1fr);
     transition: grid-template-columns var(--dur) var(--ease);
     height: 100%;
     overflow: hidden;
   }
   .app.narrow {
-    grid-template-columns: 0 minmax(0, 1fr);
+    grid-template-columns: 0 minmax(0, 1fr) 0;
+  }
+  /* チームの名簿とチケットは会話の右に置く。開いている間だけ幅を取る。 */
+  .app.teamed {
+    grid-template-columns: 240px minmax(0, 1fr) 264px;
+  }
+  .app.teamed.narrow {
+    grid-template-columns: 0 minmax(0, 1fr) 264px;
   }
   main {
     display: flex;

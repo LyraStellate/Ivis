@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/LyraStellate/Ivis/internal/agent"
+	"github.com/LyraStellate/Ivis/internal/command"
 	"github.com/LyraStellate/Ivis/internal/config"
 	"github.com/LyraStellate/Ivis/internal/provider"
 	"github.com/LyraStellate/Ivis/internal/skillreg"
@@ -84,12 +85,43 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 
 // handleTools はエージェントに許可できるツールの一覧を返す。画面が名前を
 // 持つと、ツールを増減したときに選べるものと実際に動くものがずれる。
+//
+// チーム専用のものも返す。許可はできるが、直列の会話では渡らない — その
+// 区別を画面に出せるよう、印を添える (#640275)。
 func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
-	defs := s.tools.Defs(func(string) bool { return true })
-	if defs == nil {
-		defs = []provider.ToolDef{}
+	type item struct {
+		provider.ToolDef
+		TeamOnly bool `json:"team_only,omitempty"`
 	}
-	writeJSON(w, http.StatusOK, defs)
+	out := []item{}
+	for _, name := range s.tools.Names() {
+		t, ok := s.tools.Get(name)
+		if !ok {
+			continue
+		}
+		out = append(out, item{
+			ToolDef: provider.ToolDef{Name: t.Name(), Description: t.Description(),
+				Parameters: t.Parameters()},
+			TeamOnly: tools.IsTeamOnly(t),
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleCommands は使えるコマンドの一覧を返す。画面が候補を出すために使う。
+//
+// 一覧を画面側に書き写すと、コマンドを増やしたときに片方だけ古くなる。
+// 表は 1 つしかない (#486237)。
+func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
+	type item struct {
+		Name string `json:"name"`
+		Desc string `json:"desc"`
+	}
+	out := []item{}
+	for _, c := range command.List() {
+		out = append(out, item{Name: c.Name, Desc: c.Desc})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {

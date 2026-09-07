@@ -1,0 +1,262 @@
+// @vitest-environment jsdom
+import { describe, it, expect, beforeEach } from 'vitest'
+import { mount, unmount, flushSync } from 'svelte'
+import { Transcript } from './conversation.js'
+import { leads, speaker } from './group.js'
+import Composer from './Composer.svelte'
+import Item from './Item.svelte'
+
+const msg = (o) => ({ parent_id: '', tool_calls: null, tool_name: '', error: '', ...o })
+
+describe('チームのメッセージ', () => {
+  it('確定履歴から、宛先と内訳を持つ項目になる', () => {
+    const t = new Transcript([])
+    t.loadHistory([
+      msg({ id: 'm1', role: 'user', content: '調べて', to_agent_id: 'lead' }),
+      msg({
+        id: 'm2',
+        role: 'team',
+        agent_id: 'lead',
+        to_agent_id: 'hand',
+        content: '中を見てほしい',
+        why: '利用者に頼まれた',
+        did: '範囲を決めた',
+      }),
+      msg({
+        id: 'm3',
+        role: 'team',
+        agent_id: 'hand',
+        to_agent_id: 'lead',
+        content: '終わりました',
+        decision: '受諾',
+      }),
+    ])
+
+    expect(t.items.map((i) => i.kind)).toEqual(['user', 'team', 'team'])
+    expect(t.items[1].to).toBe('hand')
+    expect(t.items[1].why).toBe('利用者に頼まれた')
+    expect(t.items[1].did).toBe('範囲を決めた')
+    expect(t.items[2].decision).toBe('受諾')
+  })
+
+  it('ストリームの team_message を末尾へ置く', () => {
+    const t = new Transcript([])
+    t.apply({
+      type: 'team_message',
+      message_id: 'x1',
+      agent_id: 'lead',
+      to: 'hand',
+      relation: '指示',
+      text: 'やって',
+      why: 'なぜ',
+      did: 'やったこと',
+    })
+    expect(t.items).toHaveLength(1)
+    expect(t.items[0]).toMatchObject({ kind: 'team', agentId: 'lead', to: 'hand', relation: '指示' })
+  })
+
+  // 手番の入れ替わりで行を足すと、送ったメッセージと二重になる。誰が動いて
+  // いるかは末尾の待っている行が出す。
+  it('手番の始まりと終わりは項目を増やさない', () => {
+    const t = new Transcript([])
+    t.apply({ type: 'turn_start', agent_id: 'hand', queued: 2 })
+    t.apply({ type: 'turn_end', agent_id: 'hand', queued: 1 })
+    expect(t.items).toHaveLength(0)
+  })
+
+  // 同じ人が続けて別の相手へ送ることがある。そこで名前を出し直さないと、
+  // 誰宛ての話がどこで切り替わったのか読めない。
+  it('送り手と宛先の組ごとに見出しを出す', () => {
+    const items = [
+      { kind: 'team', agentId: 'lead', to: 'hand' },
+      { kind: 'team', agentId: 'lead', to: 'hand' },
+      { kind: 'team', agentId: 'lead', to: 'scout' },
+    ]
+    expect(speaker(items[0])).toBe('team:lead>hand')
+    expect(leads(items)).toEqual([true, false, true])
+  })
+})
+
+describe('チームのメッセージの描画', () => {
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  // Markdown は生成中の描き直しを間引くため、少し待たないと文字が出ない。
+  async function render(item) {
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+    const app = mount(Item, {
+      target,
+      props: {
+        item,
+        lead: true,
+        owner: { isUser: false, agentId: item.agentId },
+        onApprove: () => {},
+        colorOf: () => '',
+      },
+    })
+    await new Promise((r) => setTimeout(r, 160))
+    flushSync()
+    return { target, app }
+  }
+
+  it('宛先と種別を見出しに出し、本文を主に置く', async () => {
+    const { target, app } = await render({
+      id: 't1',
+      kind: 'team',
+      status: 'done',
+      agentId: 'lead',
+      to: 'hand',
+      relation: '指示',
+      text: '中を見てほしい',
+      why: '利用者に頼まれた',
+      did: '範囲を決めた',
+    })
+    const head = target.querySelector('.who').textContent
+    expect(head).toContain('lead')
+    expect(head).toContain('hand')
+    expect(head).toContain('指示')
+    expect(target.textContent).toContain('中を見てほしい')
+    unmount(app)
+  })
+
+  // 経緯とやったことは受け手のための情報で、読んでいる利用者は前の手番を
+  // 既に見ている。畳んでおくが、1 行目は見える。
+  it('経緯とやったことは畳むが、1 行は見せる', async () => {
+    const { target, app } = await render({
+      id: 't2',
+      kind: 'team',
+      status: 'done',
+      agentId: 'hand',
+      to: 'lead',
+      text: '終わりました',
+      why: '指示を受けた',
+      did: '3 つのファイルを直した',
+    })
+    expect(target.querySelector('.peekline').textContent).toContain('3 つのファイルを直した')
+    expect(target.textContent).not.toContain('指示を受けた')
+
+    target.querySelector('.ctx .peek').click()
+    flushSync()
+    expect(target.textContent).toContain('指示を受けた')
+    unmount(app)
+  })
+
+  it('却下は目を引く形で出す', async () => {
+    const { target, app } = await render({
+      id: 't3',
+      kind: 'team',
+      status: 'done',
+      agentId: 'scout',
+      to: 'hand',
+      relation: '依頼',
+      decision: '却下',
+      text: '手が空いていません',
+    })
+    const chip = target.querySelector('.decide')
+    expect(chip.textContent).toBe('却下')
+    expect(chip.classList.contains('no')).toBe(true)
+    unmount(app)
+  })
+})
+
+describe('宛先の候補', () => {
+  const members = [
+    { id: 'lead', name: 'Lead', tier: 1, lead: true },
+    { id: 'hand', name: 'Hand', tier: 2, lead: false },
+  ]
+
+  function render(over = {}) {
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+    const sent = []
+    const app = mount(Composer, {
+      target,
+      props: {
+        commands: [{ name: 'compact', desc: 'まとめる' }],
+        members,
+        leadId: 'lead',
+        agents: [],
+        agentId: '',
+        usage: null,
+        draftBack: null,
+        onSend: (t) => sent.push(t),
+        onCancel: () => {},
+        onAgentChange: () => {},
+        ...over,
+      },
+    })
+    flushSync()
+    return { target, app, sent, area: target.querySelector('textarea') }
+  }
+
+  function type(area, text) {
+    area.value = text
+    area.dispatchEvent(new Event('input', { bubbles: true }))
+    flushSync()
+  }
+
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  it('@ で名簿を出す。判断を委ねる * が先頭に来る', () => {
+    const { target, area, app } = render()
+    type(area, '@')
+    const names = [...target.querySelectorAll('.cname')].map((e) => e.textContent)
+    expect(names).toEqual(['@*', '@lead', '@hand'])
+    unmount(app)
+  })
+
+  it('打った分で絞る', () => {
+    const { target, area, app } = render()
+    type(area, '@h')
+    const names = [...target.querySelectorAll('.cname')].map((e) => e.textContent)
+    expect(names).toEqual(['@hand'])
+    unmount(app)
+  })
+
+  // サーバーは本文の先頭しか宛先として読まない。効かない場所で候補を出せば、
+  // 選んだのに届かないことが起きる。
+  it('本文を打ち始めたら引っ込める', () => {
+    const { target, area, app } = render()
+    type(area, '@hand これを頼む')
+    expect(target.querySelector('.cmds')).toBe(null)
+    unmount(app)
+  })
+
+  it('選ぶと宛先まで入り、送信はしない', () => {
+    const { target, area, sent, app } = render()
+    type(area, '@ha')
+    target.querySelector('.cmds button').dispatchEvent(
+      new MouseEvent('mousedown', { bubbles: true, cancelable: true }),
+    )
+    flushSync()
+    expect(area.value).toBe('@hand ')
+    expect(sent).toEqual([])
+    unmount(app)
+  })
+
+  // 直列の会話には名簿が無い。@ は宛先ではなく、ただの文字である。
+  it('名簿が無ければ @ で何も出さない', () => {
+    const { target, area, app } = render({ members: [] })
+    type(area, '@')
+    expect(target.querySelector('.cmds')).toBe(null)
+    unmount(app)
+  })
+
+  it('コマンドの候補は今までどおり出る', () => {
+    const { target, area, app } = render()
+    type(area, '/c')
+    const names = [...target.querySelectorAll('.cname')].map((e) => e.textContent)
+    expect(names).toEqual(['/compact'])
+    unmount(app)
+  })
+
+  it('宛先を書かなければ窓口へ届くと伝える', () => {
+    const { target, app } = render()
+    expect(target.querySelector('.hint').textContent).toContain('lead')
+    unmount(app)
+  })
+})

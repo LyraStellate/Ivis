@@ -8,27 +8,50 @@ import (
 	"time"
 
 	"github.com/LyraStellate/Ivis/internal/agent"
+	"github.com/LyraStellate/Ivis/internal/config"
 	"github.com/LyraStellate/Ivis/internal/provider"
 	"github.com/LyraStellate/Ivis/internal/store"
+	"github.com/LyraStellate/Ivis/internal/team"
+	"github.com/LyraStellate/Ivis/internal/tools"
 )
 
-// runCtx は 1 つの実行ループの状態。委譲した子も同じ構造で走る。
+// runCtx は 1 つの実行ループの状態。委譲した子も、チームの手番も同じ構造で走る。
 type runCtx struct {
 	sessionID string
-	agent     *agent.Agent
+	// kind は会話の進み方。作業ディレクトリの場所と、渡すツールの範囲が
+	// これで決まる (#731906)。
+	kind  string
+	agent *agent.Agent
 	// parentID が空でなければ、この実行は委譲された子である。発言は親の
 	// メッセージにぶら下げて保存し、親の会話には混ぜない。
 	parentID string
 	depth    int
 	msgs     []provider.Message
 	emit     Emit
+
+	// ここから下はチームセッションの手番だけが持つ (#640275)。
+	//
+	// roster はこの会話の名簿。誰に何を送れるかはここから決まる。
+	roster *team.Roster
+	// requester はこの手番を始めさせた依頼の送り主。依頼でなければ空で、
+	// ここへ返すときは可否を添えなければならない。
+	requester string
+	// send は 1 通送る。engine が保存と行列への積み込みを行う。
+	send func(ctx context.Context, msg tools.TeamMessage) error
 }
+
+// team はチームの手番かどうか。
+func (rc *runCtx) team() bool { return rc.roster != nil }
 
 // Run は利用者の入力を 1 ターン処理する。
 func (e *Engine) Run(ctx context.Context, sessionID, userText string, emit Emit) error {
 	sess, err := e.Store.GetSession(ctx, sessionID)
 	if err != nil {
 		return err
+	}
+	// チームは進み方が違う。1 体の実行ループではなく、手番を回す。
+	if sess.Kind == config.KindTeam {
+		return e.runTeam(ctx, sess, userText, emit)
 	}
 	ag, ok := e.Agents.Get(sess.AgentID)
 	if !ok {
@@ -58,23 +81,28 @@ func (e *Engine) Run(ctx context.Context, sessionID, userText string, emit Emit)
 
 	rc := &runCtx{
 		sessionID: sessionID,
+		kind:      sess.Kind,
 		agent:     ag,
 		depth:     0,
 		msgs:      toProviderMessages(history),
 		emit:      emit,
 	}
 	_, err = e.loop(ctx, rc)
-	if err == nil {
-		emit(Event{Type: EvtDone})
+	if err != nil {
+		return err
 	}
-	return err
+	// 上限に近づいていれば、次のターンを始める前にまとめておく。答えを出して
+	// からにするのは、待たされる場所を 1 か所へ寄せるためである (#486237)。
+	e.maybeCompact(ctx, sessionID, emit)
+	emit(Event{Type: EvtDone})
+	return nil
 }
 
 // loop はツール呼び出しが無くなるまで生成を繰り返す。最後の本文を返す。
 func (e *Engine) loop(ctx context.Context, rc *runCtx) (string, error) {
-	sys := systemPrompt(rc.agent, e.Skills.Filter(rc.agent.Skills), e.delegateAgents(rc.agent),
-		e.Cfg.SessionWorkspace(rc.sessionID), time.Now())
-	defs := e.Tools.Defs(rc.agent.Allows)
+	sys := systemPrompt(rc.agent, e.Skills.Filter(rc.agent.Skills), e.delegateAgents(rc),
+		e.Cfg.SessionWorkspace(rc.kind, rc.sessionID), time.Now(), e.teamNote(ctx, rc))
+	defs := e.Tools.Defs(e.allows(rc), rc.team())
 	opts := e.options(ctx, rc.agent)
 
 	var last string
@@ -112,7 +140,7 @@ func (e *Engine) loop(ctx context.Context, rc *runCtx) (string, error) {
 
 // options はモデルへ渡す生成パラメータを組み立てる。
 //
-// 定義のものをそのまま渡さず写しを作るのは、ここで足す文脈長が定義へ
+// 定義のものをそのまま渡さず写しを作るのは、ここで足すコンテキスト長が定義へ
 // 書き戻ってしまわないようにするためである。定義はファイルが正であり、
 // 実行の都合で決めた値がそこに混ざってはならない。
 func (e *Engine) options(ctx context.Context, a *agent.Agent) map[string]any {
@@ -155,7 +183,7 @@ func (e *Engine) generate(ctx context.Context, rc *runCtx, req provider.Request)
 	var think strings.Builder
 	var calls []provider.ToolCall
 	var genErr error
-	// cut は文脈が尽きて生成が打ち切られたこと。黙って途中で終わると、
+	// cut はコンテキストが尽きて生成が打ち切られたこと。黙って途中で終わると、
 	// 利用者にはモデルが答え終えたように見える。
 	cut := false
 
@@ -214,8 +242,8 @@ loop:
 	if cut {
 		// 失敗ではないが、続きがある。何が起きたかと、次に何をすれば
 		// よいかを添える。
-		note := fmt.Sprintf("文脈の上限 (%d) に達したため、ここで打ち切られました。"+
-			"続きが要るなら、設定の文脈長を増やすか、会話を分けてください。",
+		note := fmt.Sprintf("コンテキストの上限 (%d) に達したため、ここで打ち切られました。"+
+			"続きが要るなら、設定のコンテキスト長を増やすか、会話を分けてください。",
 			e.contextLimit(ctx, rc.agent))
 		persist(note)
 		rc.emit(Event{Type: EvtError, MessageID: msg.ID, Depth: rc.depth,
@@ -240,9 +268,27 @@ func (e *Engine) maybeSetTitle(ctx context.Context, sess *store.Session, userTex
 
 // delegateAgents は指示文へ載せる委譲先を返す。誰を呼べるかは Tier だけで
 // 決まるため、定義に呼び先を列挙する必要はない。
-func (e *Engine) delegateAgents(a *agent.Agent) []*agent.Agent {
-	if !a.Allows("delegate") {
+//
+// チームでは空を返す。委譲そのものを渡さないので、載せると呼べないものの
+// 一覧になる (#640275)。
+func (e *Engine) delegateAgents(rc *runCtx) []*agent.Agent {
+	if rc.team() || !e.allows(rc)("delegate") {
 		return nil
 	}
-	return e.Agents.Below(a)
+	return e.Agents.Below(rc.agent)
+}
+
+// allows はこの実行で使ってよいツールかを返す。
+//
+// チームでは委譲を外す。委譲とメンションは、どちらも仕事を人に渡す手段で
+// ありながら、片方は記録に残って全員が指せる名前を持ち、もう片方は呼んだ
+// 本人にしか見えないまま消える。両方あると、会話の記録が「誰が何をしたか」の
+// 記録として信用できなくなる (#640275)。
+func (e *Engine) allows(rc *runCtx) func(string) bool {
+	return func(name string) bool {
+		if rc.team() && name == "delegate" {
+			return false
+		}
+		return rc.agent.Allows(name)
+	}
 }

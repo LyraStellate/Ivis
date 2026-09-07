@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/LyraStellate/Ivis/internal/config"
 	"github.com/LyraStellate/Ivis/internal/store"
 )
 
@@ -17,7 +18,7 @@ type sessionBody struct {
 }
 
 func (s *Server) body(sess *store.Session) sessionBody {
-	return sessionBody{Session: sess, Workspace: s.cfg.SessionWorkspace(sess.ID)}
+	return sessionBody{Session: sess, Workspace: s.cfg.SessionWorkspace(sess.Kind, sess.ID)}
 }
 
 func (s *Server) bodies(list []*store.Session) []sessionBody {
@@ -41,6 +42,8 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		AgentID string `json:"agent_id"`
 		Title   string `json:"title"`
+		// Kind は会話の進み方。省略すれば直列で、既存の呼び出しは変わらない。
+		Kind string `json:"kind"`
 	}
 	if err := decodeJSON(r, &in); err != nil && err.Error() != "EOF" {
 		writeError(w, http.StatusBadRequest, err)
@@ -56,14 +59,18 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 			errors.New("エージェント "+in.AgentID+" の定義が見つかりません"))
 		return
 	}
-	sess, err := s.st.CreateSession(r.Context(), in.AgentID, in.Title)
+	create := s.st.CreateSession
+	if in.Kind == config.KindTeam {
+		create = s.st.CreateTeamSession
+	}
+	sess, err := create(r.Context(), in.AgentID, in.Title)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	// 作業場所は会話を作った時点で用意する。利用者が材料を先に置けるように
 	// するため。作れなくても会話自体は使えるので、ここでは止めない。
-	_ = os.MkdirAll(s.cfg.SessionWorkspace(sess.ID), 0o755)
+	_ = os.MkdirAll(s.cfg.SessionWorkspace(sess.Kind, sess.ID), 0o755)
 	writeJSON(w, http.StatusOK, s.body(sess))
 }
 
@@ -114,6 +121,9 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, statusFor(err), err)
 		return
 	}
+	// 固有のエージェントの定義も消す。その会話のために作られたもので、
+	// 会話が無くなれば読み手が居ない (#731906)。
+	s.removeSessionAgents(r.Context(), id)
 	w.WriteHeader(http.StatusNoContent)
 }
 

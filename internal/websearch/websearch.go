@@ -54,7 +54,7 @@ func New(name, apiKey string) Searcher {
 }
 
 // clampLimit は件数を現実的な範囲に収める。多すぎる結果はそれだけで
-// 文脈を食い、モデルは上から数件しか見ない。
+// コンテキストを食い、モデルは上から数件しか見ない。
 func clampLimit(n int) int {
 	switch {
 	case n <= 0:

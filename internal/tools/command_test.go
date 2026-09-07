@@ -72,7 +72,7 @@ func TestRunCommandTimesOut(t *testing.T) {
 	}
 }
 
-// 長い出力をそのまま返すと 1 回の実行で文脈を使い切る。
+// 長い出力をそのまま返すと 1 回の実行でコンテキストを使い切る。
 func TestRunCommandTruncatesOutput(t *testing.T) {
 	if len(truncate(strings.Repeat("x", maxCommandOutput+100), maxCommandOutput)) <= maxCommandOutput {
 		t.Fatal("切り詰めの前提が崩れています")

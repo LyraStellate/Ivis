@@ -65,7 +65,7 @@ func TestSystemPromptShowsSessionWorkspace(t *testing.T) {
 	}
 }
 
-// 1 ターン使った文脈の量を記録し、画面へ流す。
+// 1 ターン使ったコンテキストの量を記録し、画面へ流す。
 func TestContextUsageIsRecorded(t *testing.T) {
 	f := newFixture(t, func(n int, req provider.Request) []provider.Event {
 		return []provider.Event{
@@ -109,7 +109,7 @@ func TestContextLimitPrefersAgentOption(t *testing.T) {
 	}
 	sess, _ := f.store.GetSession(context.Background(), id)
 	if sess.ContextLimit != 2048 {
-		t.Errorf("文脈長 = %d, want 2048", sess.ContextLimit)
+		t.Errorf("コンテキスト長 = %d, want 2048", sess.ContextLimit)
 	}
 }
 

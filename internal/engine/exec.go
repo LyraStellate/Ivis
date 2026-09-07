@@ -59,8 +59,13 @@ func (e *Engine) runOneTool(ctx context.Context, rc *runCtx, callID string, call
 	if !ok {
 		return "", fmt.Errorf("ツール %q は存在しません", call.Name)
 	}
-	if !rc.agent.Allows(call.Name) {
+	if !e.allows(rc)(call.Name) {
 		return "", fmt.Errorf("エージェント %q にツール %q の使用は許可されていません", rc.agent.ID, call.Name)
+	}
+	// 渡していないものを名前で呼ばれることはある。会話の形態が合わなければ
+	// ここで断る。
+	if tools.IsTeamOnly(tool) && !rc.team() {
+		return "", fmt.Errorf("ツール %q はチームセッションでしか使えません", call.Name)
 	}
 
 	// 確認を求めるかは、ツールの既定を設定が上書きする。判定をここ 1 か所に
@@ -92,7 +97,7 @@ func (e *Engine) runOneTool(ctx context.Context, rc *runCtx, callID string, call
 	ec := &tools.ExecContext{
 		// 作業場所は会話ごとに分ける。委譲された子も同じ場所を使う。子は親の
 		// 依頼の一部を担うのであり、成果物の置き場を分ける理由がない。
-		Workspace: e.Cfg.SessionWorkspace(rc.sessionID),
+		Workspace: e.Cfg.SessionWorkspace(rc.kind, rc.sessionID),
 		// 境界を課すかはエージェントの属性。委譲しても継承しない。
 		Confined:       !rc.agent.Unconfined,
 		CommandTimeout: time.Duration(e.Cfg.CommandTimeoutSec) * time.Second,
@@ -113,6 +118,10 @@ func (e *Engine) runOneTool(ctx context.Context, rc *runCtx, callID string, call
 			// 結び付けられるようにする。
 			return e.delegate(ctx, rc, callID, agentID, task)
 		},
+		// チームの一式。直列の会話では nil のままで、チーム専用のツールは
+		// そもそもモデルへ渡らない (#640275)。
+		Team:    teamContext(rc),
+		Tickets: e.Store,
 	}
 	return tool.Execute(ctx, ec, call.Arguments)
 }
@@ -149,9 +158,9 @@ func (e *Engine) ask(ctx context.Context, rc *runCtx, callID, text string, choic
 	return ans, nil
 }
 
-// delegate は子エージェントを独立した文脈で走らせ、その成果だけを親へ返す。
+// delegate は子エージェントを独立したコンテキストで走らせ、その成果だけを親へ返す。
 //
-// 子の途中経過は親の文脈を圧迫しないよう戻さない。履歴には親メッセージに
+// 子の途中経過は親のコンテキストを圧迫しないよう戻さない。履歴には親メッセージに
 // ぶら下げて保存するため、UI からは追える。
 func (e *Engine) delegate(ctx context.Context, parent *runCtx, callID, agentID, task string) (string, error) {
 	if parent.depth+1 > e.Cfg.MaxDelegationDepth {

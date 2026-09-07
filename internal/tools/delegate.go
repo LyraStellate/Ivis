@@ -14,7 +14,7 @@ func (t *delegateTool) Description() string {
 func (t *delegateTool) Parameters() map[string]any {
 	return schema(map[string]any{
 		"agent": strProp("任せる相手のエージェント ID。"),
-		"task":  strProp("依頼内容。相手はこの会話の文脈を見られないため、必要な前提を含めて書くこと。"),
+		"task":  strProp("依頼内容。相手はこの会話のやり取りを見られないため、必要な前提を含めて書くこと。"),
 	}, "agent", "task")
 }
 

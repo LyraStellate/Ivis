@@ -2,7 +2,7 @@
   // 発言 1 件を描く。委譲は子を抱えるので自分自身を入れ子に使う。
   import Self from './Item.svelte'
   import Markdown from './Markdown.svelte'
-  import { clock, duration, summarizeArgs } from './format.js'
+  import { clock, duration, elapsed, summarizeArgs } from './format.js'
   import { leads, owners } from './group.js'
   import { whoColor, USER_COLOR, USER_NAME } from './who.js'
 
@@ -33,6 +33,14 @@
   const nameColor = $derived(item.kind === 'user' ? USER_COLOR : whoColor(item.agentId, colorOf))
 
   const open = $derived(item.status === 'error' || item.status === 'awaiting')
+
+  // チームのメッセージ。宛先の色も引く。誰から誰へ流れたのかは、名前の色が
+  // 2 つ並んではじめて一目で分かる (#640275)。
+  const toColor = $derived(whoColor(item.to, colorOf))
+  // 経緯とやったことは畳んでおく。この 2 つは受け手のための情報で、読んで
+  // いる利用者は前の手番を既に見ている。ただし完全に隠すと、何をしたのかを
+  // 確かめるのに毎回開くことになるので、畳んだままでも 1 行目が見える。
+  let openWhy = $state(false)
 
   // 問いへの答えの下書き。項目ごとに持つので、複数の問いが並んでも混ざらない。
   let draft = $state('')
@@ -65,6 +73,21 @@
     if (thinkLive && thinkBox) thinkBox.scrollTop = thinkBox.scrollHeight
   })
 
+  // 走っている道具の経過時間。終わってから所要時間を出すだけだと、その間は
+  // 進んでいるのかどうかが分からない。動いている数字が 1 つあれば足りる。
+  const counting = $derived(
+    item.kind === 'tool' && item.status === 'running' && item.startedAt > 0,
+  )
+
+  let now = $state(Date.now())
+  $effect(() => {
+    if (!counting) return
+    now = Date.now()
+    const id = setInterval(() => (now = Date.now()), 1000)
+    return () => clearInterval(id)
+  })
+  const waited = $derived(counting ? elapsed(now - item.startedAt) : '')
+
   // 委譲の中は、渡した先を話し手として同じ規則で組み直す。
   const kids = $derived(item.children ?? [])
   const kidLeads = $derived(leads(kids))
@@ -91,6 +114,15 @@
   {#if lead}
     <div class="who">
       <span class="name" style:color={nameColor}>{name}</span>
+      {#if item.kind === 'team'}
+        <span class="arrow">→</span>
+        <span class="name" style:color={toColor}>{item.to}</span>
+        {#if item.relation}<span class="rel">{item.relation}</span>{/if}
+        {#if item.decision}
+          <!-- 却下は目を引く色で出す。止まった理由として、後から探される。 -->
+          <span class="rel decide" class:no={item.decision === '却下'}>{item.decision}</span>
+        {/if}
+      {/if}
       {#if item.status === 'streaming'}
         <span class="typing" role="status" aria-label="生成中"><i></i><i></i><i></i></span>
       {/if}
@@ -139,7 +171,42 @@
       </div>
 
     {:else if item.kind === 'notice'}
-      <p class="failed standalone">{item.text}</p>
+      <!-- 失敗と、そうでない知らせを同じ見た目にしない。圧縮した知らせが赤で
+           出ると、何かが壊れたように読める。 -->
+      {#if item.status === 'error'}
+        <p class="failed standalone">{item.text}</p>
+      {:else}
+        <p class="told standalone">{item.text}</p>
+      {/if}
+
+    {:else if item.kind === 'summary'}
+      <!-- 圧縮の区切り。ここより前はモデルへ渡らない。中身は畳んでおく。
+           読みたいのは会話であって、その要約ではないためである。 -->
+      <details class="sum">
+        <summary>
+          <span class="mark"></span>
+          <span>ここまでをまとめました。これより前はモデルへ渡していません</span>
+        </summary>
+        <Markdown text={item.text} />
+      </details>
+
+    {:else if item.kind === 'team'}
+      <div class="body">
+        <Markdown text={item.text} />
+        {#if item.why || item.did}
+          <div class="ctx" class:on={openWhy}>
+            <button class="peek" onclick={() => (openWhy = !openWhy)} aria-expanded={openWhy}>
+              経緯とやったこと
+            </button>
+            {#if openWhy}
+              {#if item.why}<p><span class="tag">経緯</span>{item.why}</p>{/if}
+              {#if item.did}<p><span class="tag">やったこと</span>{item.did}</p>{/if}
+            {:else}
+              <p class="peekline">{item.did || item.why}</p>
+            {/if}
+          </div>
+        {/if}
+      </div>
 
     {:else if item.kind === 'tool'}
       <details {open}>
@@ -150,7 +217,13 @@
           {#if item.status === 'awaiting'}
             <span class="waiting">{item.questionId ? '回答待ち' : '承認待ち'}</span>
           {/if}
-          {#if item.ms}<span class="ms mono tnum">{duration(item.ms)}</span>{/if}
+          {#if item.ms}
+            <span class="ms mono tnum">{duration(item.ms)}</span>
+          {:else if waited}
+            <!-- 走っている間も数える。終わってから所要時間だけ出すと、その間は
+                 進んでいるのかどうかが分からない。 -->
+            <span class="ms mono tnum running">{waited}</span>
+          {/if}
         </summary>
         <div class="detail">
           {#if item.args}<pre class="mono">{JSON.stringify(item.args, null, 2)}</pre>{/if}
@@ -252,6 +325,51 @@
 </div>
 
 <style>
+  /* チームのメッセージ。宛先と種別は見出しの一部として、本文より小さく置く。 */
+  .arrow {
+    color: var(--g9);
+    font-size: 11px;
+  }
+  .rel {
+    flex: none;
+    padding: 0 5px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--fg-dim);
+    font-size: 10px;
+    line-height: 15px;
+  }
+  .rel.decide {
+    border-color: var(--ok, var(--accent-line));
+    color: var(--ok, var(--accent-line));
+  }
+  .rel.decide.no {
+    border-color: var(--danger-border);
+    color: var(--danger-text);
+    background: var(--danger-surface);
+  }
+  .ctx {
+    margin-top: 6px;
+    border-top: 1px solid var(--line);
+    padding-top: 5px;
+  }
+  .ctx p {
+    margin: 3px 0 0;
+    color: var(--fg-muted);
+    font-size: 12px;
+    line-height: 1.7;
+  }
+  .ctx .peekline {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--g9);
+  }
+  .ctx .tag {
+    margin-right: 6px;
+    color: var(--g9);
+    font-size: 10px;
+  }
   /* やり直しは、その依頼の上で手を止めたときだけ出す。常に見えていると、
      会話を読む間ずっと消す操作が視界に入る。 */
   .rewind {
@@ -288,7 +406,8 @@
     color: var(--g9);
   }
   .think.on .peek::before,
-  .answer.on .peek::before { content: "▾  "; }
+  .answer.on .peek::before,
+  .ctx.on .peek::before { content: "▾  "; }
 
   /* 回答は畳めるだけで、開いているときは本文としてそのまま読ませる。
      推論のように地へ沈めない。 */
@@ -351,6 +470,33 @@
 
   .body.plain { white-space: pre-wrap; overflow-wrap: anywhere; }
 
+  /* 失敗ではない知らせ。文字だけで置く。囲むと、答えと同じ重さになる。 */
+  .told {
+    margin: 0;
+    color: var(--fg-muted);
+    font-size: 12px;
+    white-space: pre-wrap;
+  }
+
+  /* 圧縮の区切り。会話の流れを断つ線として置き、中身は開いたときだけ出す。 */
+  .sum > summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    color: var(--g9);
+    font-size: 11px;
+    list-style: none;
+  }
+  .sum > summary::-webkit-details-marker { display: none; }
+  .sum .mark {
+    flex: 1;
+    height: 1px;
+    max-width: 24px;
+    background: var(--line, currentColor);
+    opacity: 0.5;
+  }
+
   .failed { margin: 6px 0 0; color: var(--danger-text); font-size: 12px; }
   .failed.standalone {
     margin: 0;
@@ -389,7 +535,15 @@
   }
   .dot.done { background: var(--ok); }
   .dot.error { background: var(--danger); }
-  .dot.running { background: var(--accent-line); }
+  /* 走っている印は明滅させる。色だけでは、止まっている行と見分けがつかない。 */
+  .dot.running {
+    background: var(--accent-line);
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.35; }
+    50% { opacity: 1; }
+  }
   .dot.awaiting { background: transparent; border: 2px solid var(--accent-line); }
   .dot.denied,
   .dot.stopped { background: transparent; border: 2px solid var(--g7); }
@@ -404,6 +558,7 @@
     white-space: nowrap;
   }
   .ms { flex: none; font-size: 11px; color: var(--g9); }
+  .ms.running { color: var(--accent-line); }
   .waiting { flex: none; color: var(--accent-line); font-size: 11px; }
 
   .detail { padding: 4px 0 6px 14px; display: grid; gap: 6px; }

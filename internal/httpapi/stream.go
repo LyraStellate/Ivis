@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/LyraStellate/Ivis/internal/command"
 	"github.com/LyraStellate/Ivis/internal/engine"
 	"github.com/LyraStellate/Ivis/internal/store"
 )
@@ -34,7 +35,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Discord の会話へは画面から送らせない。送っても内容はチャンネルに
-	// 出ないので、次にそこで話す人は、自分の知らない文脈が挟まった状態で
+	// 出ないので、次にそこで話す人は、自分の知らないやり取りが挟まった状態で
 	// 会話を続けることになる (#617204)。
 	if sess.Source == store.SourceDiscord {
 		writeError(w, http.StatusConflict,
@@ -45,6 +46,13 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, errors.New("ストリーミングに対応していません"))
+		return
+	}
+
+	// コマンドかどうかを、占有を取る前に見る。占有を取ってからだと /stop が
+	// 「生成中です」で断られ、止めたいときに止められない (#486237)。
+	if name, arg, ok := command.Parse(in.Text); ok {
+		s.runCommand(w, r, sess, name, arg)
 		return
 	}
 
@@ -84,6 +92,62 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 			send(engine.Event{Type: engine.EvtError, Error: err.Error(), Kind: kindOf(err)})
 		}
 	}
+}
+
+// runCommand はコマンドを実行し、その返事を生成と同じ経路で流す。
+//
+// 画面から見て送信の応答は常に同じ形にする。コマンドだけ別の返し方にすると、
+// 送った側は打ち終えるまでどちらが返るか分からない。
+//
+// 先に流し口を開けてから実行するのは、圧縮のように数十秒かかるコマンドが
+// あるためである。終わってから開けると、その間は何も届かない。
+func (s *Server) runCommand(w http.ResponseWriter, r *http.Request, sess *store.Session, name, arg string) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, errors.New("ストリーミングに対応していません"))
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	send := func(ev engine.Event) {
+		b, err := json.Marshal(ev)
+		if err != nil {
+			return
+		}
+		fmt.Fprintf(w, "data: %s\n\n", b)
+		flusher.Flush()
+	}
+
+	deps := &command.Deps{
+		Store: s.st,
+		Runs:  s.runs,
+		Compact: func(ctx context.Context, id, instructions string) (*engine.CompactResult, error) {
+			// 何をしているかを、待っている間に出す。要約はまとめて 1 度に
+			// 届くので、こちらで報告しないと無音のままになる。
+			send(engine.Event{Type: engine.EvtStage, Stage: engine.StageCompacting})
+			defer send(engine.Event{Type: engine.EvtStage})
+			return s.eng.Compact(ctx, id, instructions, func(chars int) {
+				send(engine.Event{Type: engine.EvtStage, Stage: engine.StageCompacting, Done: chars})
+			})
+		},
+	}
+	send(engine.Event{Type: engine.EvtNotice,
+		Text: command.Run(r.Context(), deps, sess, name, arg)})
+
+	// 履歴を消す・まとめるコマンドは使用量を変える。伝えないと、既に空いて
+	// いるのに満杯のままの割合が出続ける。
+	if sess != nil {
+		if cur, err := s.st.GetSession(r.Context(), sess.ID); err == nil {
+			send(engine.Event{Type: engine.EvtUsage,
+				PromptTokens: cur.ContextTokens, ContextLimit: cur.ContextLimit})
+		}
+	}
+	send(engine.Event{Type: engine.EvtDone})
 }
 
 // handleCancel は生成中のターンを中断する。

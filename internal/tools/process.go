@@ -230,7 +230,7 @@ func (s *ProcSet) Start(session, name, line, dir string) (*Proc, error) {
 
 	shellName, flag := shell()
 	// 会話の終わりに縛らない。ツール呼び出しをまたいで生きることが目的なので、
-	// 起動した呼び出しの文脈で殺してはならない。止めるのは stop か会話の削除。
+	// 起動した呼び出しの終わりで殺してはならない。止めるのは stop か会話の削除。
 	cmd := exec.Command(shellName, flag, line)
 	setShellLine(cmd, line)
 	cmd.Dir = dir

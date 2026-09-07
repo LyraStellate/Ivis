@@ -9,12 +9,17 @@
     runningId,
     onOpen,
     onNew,
+    onNewTeam,
     onDelete,
     onReload,
     onSettings,
   } = $props()
 
   let listEl = $state(null)
+
+  // 新しい会話の隣に畳んでおく。日常的に使うのは直列の会話のほうなので、
+  // チームは 1 手増える位置に置く (#731906)。
+  let moreOpen = $state(false)
 
   const agentName = (id) => agents.find((a) => a.id === id)?.name ?? id
 
@@ -56,9 +61,15 @@
           <!-- 生成中でも開ける。返事を待つ間ほかの会話を読めないほうが困る。
                走っている会話には印を出し、どこが動いているかを示す。 -->
           <button class="open" onclick={() => onOpen(s.id)} onkeydown={onListKeydown}>
-            <span class="name">{s.title}</span>
+            <span class="name">
+              {#if s.kind === 'team'}<span class="team" title="チームセッション">◇</span>{/if}
+              {s.title}
+            </span>
             {#if s.id === runningId}
               <span class="run" title="生成中"><i></i><i></i><i></i></span>
+            {:else if s.kind === 'team'}
+              <!-- チームには担当が 1 人ではない。1 つの名前を出すと嘘になる。 -->
+              <span class="agent">{(s.members?.length ?? 0)} 人のチーム</span>
             {:else}
               <span class="agent">{agentName(s.agent_id)}</span>
             {/if}
@@ -87,7 +98,40 @@
         読み込めなかった定義が {problems} 件
       </button>
     {/if}
-    <button class="new" onclick={() => onNew()} disabled={agents.length === 0}>新しい会話</button>
+    <div class="starter">
+      <button class="new" onclick={() => onNew()} disabled={agents.length === 0}>新しい会話</button>
+      <button
+        class="more"
+        onclick={() => (moreOpen = !moreOpen)}
+        disabled={agents.length === 0}
+        title="ほかの始め方"
+        aria-label="ほかの始め方"
+        aria-expanded={moreOpen}
+      >
+        <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
+          <path
+            d="M2.5 4.5 L6 8 L9.5 4.5"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+      </button>
+    </div>
+    {#if moreOpen}
+      <button
+        class="team-new"
+        onclick={() => {
+          moreOpen = false
+          onNewTeam?.()
+        }}
+        disabled={agents.length === 0}
+      >
+        ◇ チームセッション
+      </button>
+    {/if}
     <div class="acts">
       <button class="quiet" onclick={onReload}>再読込</button>
       <button class="quiet" onclick={onSettings}>設定</button>
@@ -244,7 +288,26 @@
     display: grid;
     gap: 6px;
   }
-  .new { width: 100%; }
+  .starter { display: flex; gap: 1px; }
+  .new { flex: 1; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  .more {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 24px;
+    padding: 0;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    color: var(--fg-dim);
+  }
+  .team-new {
+    width: 100%;
+    text-align: left;
+    font-size: 12px;
+    color: var(--fg-dim);
+  }
+  /* チームの印。担当の名前を出せない行を、記号だけで見分けられるようにする。 */
+  .team { color: var(--accent-line); margin-right: 3px; }
   .acts { display: flex; gap: 6px; }
   .acts button { flex: 1; }
   .issues {

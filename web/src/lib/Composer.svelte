@@ -3,6 +3,10 @@
   import Gauge from './Gauge.svelte'
 
   let {
+    commands = [],
+    // members はチームセッションの名簿。宛先の候補に使う。直列の会話では空。
+    members = [],
+    leadId = '',
     disabled = false,
     // reason は送れない理由。ただ押せなくすると、壊れているのか、そういう
     // ものなのかが分からない。
@@ -42,6 +46,52 @@
     area.style.height = Math.min(area.scrollHeight, MAX) + 'px'
   })
 
+  // 先頭が / なら、それはコマンドである。先頭が @ なら宛先である。どちらも
+  // 名前を打っている間だけ候補を出す。引数や本文まで打ったあとも出し続けると、
+  // 書いている文字の上に一覧が居座る。
+  //
+  // 宛先を先頭でしか受けないのは、サーバーが本文の先頭しか読まないため
+  // (internal/team の ParseMention)。効かない場所で候補を出せば、選んだのに
+  // 届かないことが起きる (#640275)。
+  //
+  // Esc で閉じたことを覚える。閉じたそばから開き直しては、下の文字が読めない。
+  let dismissed = $state(false)
+  let pick = $state(0)
+
+  const typingCmd = $derived(/^\/[^\s]*$/.test(draft))
+  const typingTo = $derived(members.length > 0 && /^@[^\s]*$/.test(draft))
+  const mark = $derived(typingTo ? '@' : '/')
+
+  // 宛先の候補。"*" を先に置く。誰に頼めばよいか分からないときにこそ開く
+  // 一覧なので、判断を委ねる選択肢が上にある。
+  const addressees = $derived([
+    { name: '*', desc: leadId ? `宛先を ${leadId} が決めます` : '宛先を窓口が決めます' },
+    ...members.map((m) => ({
+      name: m.id,
+      desc: `${m.name}${m.lead ? ' (窓口)' : ''} \u00b7 Tier ${m.tier}`,
+    })),
+  ])
+
+  const matches = $derived.by(() => {
+    const list = typingCmd ? commands : typingTo ? addressees : []
+    const typed = draft.toLowerCase()
+    return list.filter((c) => (mark + c.name).toLowerCase().startsWith(typed))
+  })
+  const showList = $derived(!dismissed && matches.length > 0)
+
+  $effect(() => {
+    draft
+    dismissed = false
+    pick = 0
+  })
+
+  // 候補を選ぶと名前まで入る。引数や本文が続くので、送信まではしない。
+  function complete(name) {
+    draft = mark + name + ' '
+    dismissed = true
+    area?.focus()
+  }
+
   function submit() {
     // 生成中は送れない。ただし書いておくことはできる。返ってくるのを待つ間に
     // 次の依頼をまとめられるようにするためで、書きかけは消さない。
@@ -54,6 +104,26 @@
   }
 
   function onKeydown(e) {
+    if (showList) {
+      // 候補が出ている間は、上下と Tab をその選択に使う。Enter は選ぶ側に
+      // 寄せる。打ち終えたつもりで送ってしまうより、選び直せるほうがよい。
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        const d = e.key === 'ArrowDown' ? 1 : -1
+        pick = (pick + d + matches.length) % matches.length
+        return
+      }
+      if (e.key === 'Tab' || (isSubmit(e) && matches.length > 0)) {
+        e.preventDefault()
+        complete(matches[pick].name)
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        dismissed = true
+        return
+      }
+    }
     if (!isSubmit(e)) return
     e.preventDefault()
     submit()
@@ -82,6 +152,29 @@
   }}
 >
   <div class="well">
+    {#if showList}
+      <!-- 打つ場所のすぐ上に出す。設定の奥に一覧があっても、いま打っている
+           人は読まない。 -->
+      <ul class="cmds" role="listbox" aria-label={typingTo ? '宛先' : 'コマンド'}>
+        {#each matches as c, i (c.name)}
+          <li>
+            <button
+              type="button"
+              class:on={i === pick}
+              role="option"
+              aria-selected={i === pick}
+              onmousedown={(e) => {
+                e.preventDefault()
+                complete(c.name)
+              }}
+            >
+              <span class="cname mono">{mark}{c.name}</span>
+              <span class="cdesc">{c.desc}</span>
+            </button>
+          </li>
+        {/each}
+      </ul>
+    {/if}
     <textarea
       bind:this={area}
       bind:value={draft}
@@ -110,8 +203,17 @@
 
       <Gauge tokens={usage?.tokens ?? 0} limit={usage?.limit ?? 0} />
 
+      <!-- コマンドがあることは、打つ場所の隣でしか伝わらない。設定の奥に
+           書いても、いま送ろうとしている人は読まない。 -->
       <span class="hint">
-        {reason || (busy ? '生成中は送信できません。Esc で中断' : 'Shift + Enter で改行')}
+        {reason ||
+          (busy
+            ? '生成中は送信できません。Esc で中断'
+            : draft.startsWith('/')
+              ? 'コマンドとして実行します。/help で一覧'
+              : members.length > 0 && !draft.startsWith('@')
+                ? `宛先を書かなければ ${leadId} へ届きます。@ で相手を選べます`
+                : 'Shift + Enter で改行')}
       </span>
 
       <!-- 始める操作と止める操作を同じ場所に置く。走っているものを止める
@@ -157,6 +259,44 @@
   }
   .well:focus-within {
     border-color: var(--accent-line);
+  }
+
+  /* コマンドの候補。入力欄の中に置き、打っている文字のすぐ上に出す。 */
+  .cmds {
+    list-style: none;
+    margin: 0 0 6px;
+    padding: 0 0 6px;
+    border-bottom: 1px solid var(--line);
+  }
+  .cmds button {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    width: 100%;
+    padding: 4px 6px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--fg);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .cmds button:hover,
+  .cmds button.on {
+    background: var(--hover, rgb(128 128 128 / 0.12));
+  }
+  .cname {
+    flex: none;
+    color: var(--accent-line);
+    font-size: 12px;
+  }
+  .cdesc {
+    overflow: hidden;
+    color: var(--fg-muted);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   textarea {

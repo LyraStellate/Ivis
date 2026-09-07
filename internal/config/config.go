@@ -38,7 +38,10 @@ type Config struct {
 	MaxIterations int `json:"max_iterations"`
 	// MaxDelegationDepth は委譲の深さの上限。
 	MaxDelegationDepth int `json:"max_delegation_depth"`
-	// ContextTokens は 1 回の生成で使う文脈長 (num_ctx)。明示しないと提供元の
+	// MaxTurns はチームセッションの 1 ラウンドで回す手番の上限。互いに
+	// 送り合う形に入ると手番は尽きないので、どこかで必ず止める (#640275)。
+	MaxTurns int `json:"max_turns"`
+	// ContextTokens は 1 回の生成で使うコンテキスト長 (num_ctx)。明示しないと提供元の
 	// 既定 (Ollama は 4096) が使われ、ツールの結果を往復するだけで埋まる。
 	// 埋まると古い側から黙って捨てられ、指示文ごと失われて応答が途中で終わる。
 	// エージェント定義の options に num_ctx があれば、そちらが優先される。
@@ -103,6 +106,7 @@ func Default() *Config {
 		WorkspaceDir:       filepath.Join(home, ".ivis", "workspace"),
 		MaxIterations:      40,
 		MaxDelegationDepth: 3,
+		MaxTurns:           24,
 		ContextTokens:      16384,
 		ScriptTimeoutSec:   120,
 		CommandTimeoutSec:  120,
@@ -155,6 +159,16 @@ func (c *Config) Save() error {
 	return os.WriteFile(c.path, append(b, '\n'), 0o644)
 }
 
+// 会話の種類。直列に 1 本ずつ進むか、複数のメンバーが手番を回すか (#731906)。
+//
+// 出自 (web / discord) とは別の軸として持つ。出自は「どこから来た会話か」、
+// 種類は「どう進む会話か」であり、混ぜると Discord から来た会話をチームに
+// できるかという問いに答えられなくなる。
+const (
+	KindSeries = "series"
+	KindTeam   = "team"
+)
+
 // SeriesDir は直列に進む会話の作業場所を束ねる段の名前。
 //
 // 実行形態の段を 1 つ挟むのは、この先の並列セッションが別の形の識別子
@@ -162,15 +176,32 @@ func (c *Config) Save() error {
 // 並列を入れるときに直列側のパスを変えずに済む (#903215)。
 const SeriesDir = "series"
 
+// TeamDir はチームセッションの作業場所を束ねる段の名前。メンバーは全員
+// この 1 つを共有する。1 つの仕事を分担しているのだから、成果物の置き場を
+// 分ける理由がない (#731906)。
+const TeamDir = "team"
+
 // SessionWorkspace はそのセッションの作業ディレクトリを返す。
 //
-// 場所は ID から一意に決まる派生物なので、どこにも保存しない。保存すると
-// 作業ディレクトリの設定を変えたときに食い違う。
-func (c *Config) SessionWorkspace(sessionID string) string {
+// 場所は種類と ID から一意に決まる派生物なので、どこにも保存しない。保存
+// すると作業ディレクトリの設定を変えたときに食い違う。
+func (c *Config) SessionWorkspace(kind, sessionID string) string {
 	if sessionID == "" {
 		return c.WorkspaceDir
 	}
-	return filepath.Join(c.WorkspaceDir, SeriesDir, sessionID)
+	seg := SeriesDir
+	if kind == KindTeam {
+		seg = TeamDir
+	}
+	return filepath.Join(c.WorkspaceDir, seg, sessionID)
+}
+
+// SessionAgentsDir はそのセッション固有のエージェント定義の置き場を返す。
+//
+// 共通の定義と同じ形式・同じ検証で読める場所に置く。「定義はファイルが正」
+// という原則をチームのためだけに折らない (#731906)。
+func (c *Config) SessionAgentsDir(sessionID string) string {
+	return filepath.Join(c.DataDir, "sessions", sessionID, "agents")
 }
 
 // Path は設定の読み込み元を返す。
@@ -229,6 +260,9 @@ func (c *Config) normalize() {
 	}
 	if c.MaxDelegationDepth <= 0 {
 		c.MaxDelegationDepth = d.MaxDelegationDepth
+	}
+	if c.MaxTurns <= 0 {
+		c.MaxTurns = d.MaxTurns
 	}
 	if c.ContextTokens <= 0 {
 		c.ContextTokens = d.ContextTokens

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { bucket, byBucket, summarizeArgs, duration } from './format.js'
+import { bucket, byBucket, summarizeArgs, duration, elapsed } from './format.js'
 
 const at = (s) => new Date(s)
 
@@ -78,5 +78,19 @@ describe('duration', () => {
   it('秒に届くまではミリ秒で出す', () => {
     expect(duration(12)).toBe('12ms')
     expect(duration(1500)).toBe('1.5s')
+  })
+})
+
+describe('elapsed', () => {
+  it('1 秒刻みに丸める', () => {
+    // 細かく動く桁が視界の端にあると気が散る。
+    expect(elapsed(0)).toBe('0s')
+    expect(elapsed(1900)).toBe('1s')
+    expect(elapsed(59_000)).toBe('59s')
+  })
+
+  it('分をまたいだら分で出す', () => {
+    expect(elapsed(60_000)).toBe('1m00s')
+    expect(elapsed(125_000)).toBe('2m05s')
   })
 })

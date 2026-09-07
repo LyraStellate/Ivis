@@ -55,7 +55,7 @@ export function copyOf(form) {
  * 待たずに指せると、どこが悪いのかがその場で分かる。
  * 問題が無ければ null を返す。
  */
-export function check(form, existingIds = []) {
+export function check(form, existingIds = [], opts = {}) {
   const id = (form.id ?? '').trim()
   if (!id) return { field: 'id', reason: 'ID を入力してください' }
   if (!/^[A-Za-z0-9._-]+$/.test(id)) {
@@ -67,10 +67,16 @@ export function check(form, existingIds = []) {
 
   const tier = Number(form.tier)
   if (!Number.isInteger(tier)) return { field: 'tier', reason: 'Tier は整数で指定してください' }
-  if (id === DEFAULT_ID) {
-    if (tier !== 0) return { field: 'tier', reason: '規定エージェントの Tier は 0 で固定です' }
-  } else if (tier < MIN_TIER) {
-    return { field: 'tier', reason: 'Tier は 1 以上です。0 は規定エージェントだけが持てます' }
+  if (tier < 0) return { field: 'tier', reason: 'Tier に負の数は指定できません' }
+  // セッション固有の定義は 0 も使える。共通で 0 を規定エージェントだけに
+  // 絞っているのは、会話の入口が 2 つある状態を作れないようにするためで、
+  // チームの入口は窓口として会話が明示して持つ (#731906)。
+  if (!opts.local) {
+    if (id === DEFAULT_ID) {
+      if (tier !== 0) return { field: 'tier', reason: '規定エージェントの Tier は 0 で固定です' }
+    } else if (tier < MIN_TIER) {
+      return { field: 'tier', reason: 'Tier は 1 以上です。0 は規定エージェントだけが持てます' }
+    }
   }
   return null
 }

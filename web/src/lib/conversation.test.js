@@ -282,3 +282,73 @@ describe('送信した発言の識別子', () => {
     expect(tx.items[0].id).toBe('srv-1')
   })
 })
+
+// 許可も答えも別の要求で送るため、経過のストリームには何も現れない。走り出した
+// ことを画面が自分で進めないと、結果が返るまで「承認待ち」のまま止まって見える。
+describe('返事を返したあとの行', () => {
+  const upTo = (tx) => {
+    tx.pushUser('書いて')
+    tx.apply({ type: 'message_start', message_id: 'm1', agent_id: 'general' })
+    tx.apply({
+      type: 'tool_call', tool_call_id: 'c1', tool: 'write_file', args: { path: 'a.md' },
+    })
+    tx.apply({
+      type: 'approval_request', tool_call_id: 'c1', approval: { id: 'ap1' },
+    })
+  }
+
+  it('許可したら走っている行になる', () => {
+    const items = []
+    const tx = new Transcript(items)
+    upTo(tx)
+    const row = items.find((x) => x.kind === 'tool')
+    expect(row.status).toBe('awaiting')
+
+    tx.responded('ap1')
+    expect(row.status).toBe('running')
+    expect(row.approvalId).toBe('')
+    // 待たせた分は道具の所要時間ではないので、いまから数え直す。
+    expect(row.startedAt).toBeGreaterThan(0)
+  })
+
+  it('知らない識別子では何も起きない', () => {
+    const items = []
+    const tx = new Transcript(items)
+    upTo(tx)
+    const row = items.find((x) => x.kind === 'tool')
+    tx.responded('ほかの何か')
+    expect(row.status).toBe('awaiting')
+  })
+})
+
+// 圧縮は会話の見え方を変える。失敗ではないので、赤い通知と同じ扱いにしない。
+describe('圧縮の知らせ', () => {
+  it('知らせは失敗ではない項目として並ぶ', () => {
+    const items = []
+    const tx = new Transcript(items)
+    tx.pushUser('/compact')
+    tx.apply({ type: 'notice', text: '12 件をまとめました。' })
+
+    const last = items[items.length - 1]
+    expect(last.kind).toBe('notice')
+    expect(last.status).toBe('done')
+    expect(last.text).toContain('まとめました')
+  })
+
+  // 圧縮より前の発言も画面には残る。どこで切り替わったかが見えないと、
+  // 答えが変わった理由が読めない。
+  it('履歴の要約は区切りとして出る', () => {
+    const items = []
+    const tx = new Transcript(items)
+    tx.loadHistory([
+      msg({ id: 'a', role: 'user', content: '古い依頼', created_at: '2026-09-07T09:00:00Z' }),
+      msg({ id: 'b', role: 'summary', content: 'これまでの経過', agent_id: 'general' }),
+      msg({ id: 'c', role: 'user', content: '新しい依頼', created_at: '2026-09-07T09:10:00Z' }),
+    ])
+
+    expect(items.map((i) => i.kind)).toEqual(['user', 'summary', 'user'])
+    expect(items[1].text).toBe('これまでの経過')
+    // 古い発言は消えない。
+    expect(items[0].text).toBe('古い依頼')
+  })
+})

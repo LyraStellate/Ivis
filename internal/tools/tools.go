@@ -13,10 +13,11 @@ import (
 
 	"github.com/LyraStellate/Ivis/internal/provider"
 	"github.com/LyraStellate/Ivis/internal/skillreg"
+	"github.com/LyraStellate/Ivis/internal/store"
 	"github.com/LyraStellate/Ivis/internal/websearch"
 )
 
-// ExecContext はツール 1 回の実行に必要な文脈。
+// ExecContext はツール 1 回の実行に必要な一式。
 type ExecContext struct {
 	// Workspace は相対指定の基準。境界を課す場合は、越えてはならない境界でもある。
 	Workspace string
@@ -37,7 +38,7 @@ type ExecContext struct {
 	// Session は会話の識別子。走らせたままのプロセスを会話ごとに束ねる。
 	Session string
 	// Procs は走らせたままのプロセス。ツール呼び出しをまたいで生き続けるので、
-	// 実行 1 回の文脈ではなく、それより長く生きるものを受け取る。
+	// 実行 1 回で閉じるものではなく、それより長く生きるものを受け取る。
 	Procs *ProcSet
 	// Ask は利用者へ問い、答えが返るまで待つ。engine が注入する。問える
 	// 相手が居ない場面では nil になる。
@@ -47,6 +48,11 @@ type ExecContext struct {
 	// CheckDelegate は委譲先として許可されているかの判定。許されないときは
 	// 理由を返す。理由はそのままモデルへ渡り、次の手を考える材料になる。
 	CheckDelegate func(agentID string) error
+	// Team はチームセッションの手番 1 回分。直列の会話では nil で、チーム
+	// 専用のツールはそもそもモデルへ渡らない (#640275)。
+	Team *TeamContext
+	// Tickets はチケットの読み書き先。チーム専用のツールだけが使う (#189542)。
+	Tickets *store.Store
 }
 
 // Tool はモデルから呼べる 1 つの機能。
@@ -88,6 +94,13 @@ func NewRegistry() *Registry {
 	r.Add(&writeProcessTool{})
 	r.Add(&stopProcessTool{})
 	r.Add(&askUserTool{})
+	// ここから下はチームセッションでしか渡らない。直列の会話では意味を
+	// 持たないので、セッションの種類でふるう (#640275)。
+	r.Add(&sendMessageTool{})
+	r.Add(&createTicketTool{})
+	r.Add(&updateTicketTool{})
+	r.Add(&getTicketTool{})
+	r.Add(&listTicketsTool{})
 	return r
 }
 
@@ -112,13 +125,20 @@ func (r *Registry) Names() []string {
 }
 
 // Defs は許可されたツールだけをモデルへ渡す形に変換する。
-func (r *Registry) Defs(allowed func(string) bool) []provider.ToolDef {
+//
+// team が偽のときチーム専用のツールを外す。定義側で "*" を選んでいても、
+// 直列の会話にチームのツールを渡さない。渡すと、モデルは呼べるものとして
+// 扱い、呼んでから「この会話では使えません」と返されることになる。
+func (r *Registry) Defs(allowed func(string) bool, team bool) []provider.ToolDef {
 	var out []provider.ToolDef
 	for _, n := range r.order {
 		if !allowed(n) {
 			continue
 		}
 		t := r.tools[n]
+		if !team && IsTeamOnly(t) {
+			continue
+		}
 		out = append(out, provider.ToolDef{
 			Name:        t.Name(),
 			Description: t.Description(),
@@ -199,7 +219,7 @@ func strProp(desc string) map[string]any {
 	return map[string]any{"type": "string", "description": desc}
 }
 
-// truncate は出力が文脈を食い潰さないよう上限で切る。
+// truncate は出力がコンテキストを食い潰さないよう上限で切る。
 func truncate(s string, max int) string {
 	if len(s) <= max {
 		return s

@@ -13,6 +13,17 @@ export function duration(ms) {
   return (ms / 1000).toFixed(1) + 's'
 }
 
+/**
+ * 待っている間の経過時間を返す。終わった仕事の所要時間 (duration) と分けて
+ * あるのは、まだ動いている数字だからである。1 秒刻みに丸めるのは、細かく
+ * 動く桁が視界の端にあると気が散るため。
+ */
+export function elapsed(ms) {
+  const s = Math.max(0, Math.floor((ms ?? 0) / 1000))
+  if (s < 60) return s + 's'
+  return Math.floor(s / 60) + 'm' + String(s % 60).padStart(2, '0') + 's'
+}
+
 /** 1 行の要約に出す引数の優先順。何を操作しようとしているかが先に読める。 */
 const LEAD = ['path', 'name', 'agent', 'skill', 'script', 'task']
 /** 要約に出さない引数。長すぎて行を潰すため、展開したときだけ見せる。 */

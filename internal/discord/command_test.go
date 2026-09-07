@@ -8,6 +8,9 @@ import (
 	"github.com/LyraStellate/Ivis/internal/store"
 )
 
+// 見分け方そのものの試験は internal/command にある。ここで確かめるのは、
+// Discord の呼びかけがその表へ正しく届くかである。
+
 // lastSaid は最後に投稿された本文を返す。
 func (h *harness) lastSaid(t *testing.T) string {
 	t.Helper()
@@ -16,35 +19,6 @@ func (h *harness) lastSaid(t *testing.T) string {
 		t.Fatal("何も投稿されていない")
 	}
 	return msgs[len(msgs)-1].p.Content
-}
-
-func TestParseCommand(t *testing.T) {
-	cases := []struct {
-		in   string
-		name string
-		rest string
-		ok   bool
-	}{
-		{"/stop", "stop", "", true},
-		// 打った本人にはどちらを打ったか見えている。大小で別のものにすると、
-		// 効かない理由が分からない。
-		{"/Stop", "stop", "", true},
-		{"/CLEAR", "clear", "", true},
-		{"/clear いま", "clear", "いま", true},
-		{"こんにちは", "", "", false},
-		{"", "", "", false},
-		{"/", "", "", false},
-		{"/ stop", "", "", false},
-		// 途中の / は文の一部である。
-		{"a/b について", "", "", false},
-	}
-	for _, c := range cases {
-		name, rest, ok := parseCommand(c.in)
-		if ok != c.ok || name != c.name || rest != c.rest {
-			t.Errorf("parseCommand(%q) = (%q, %q, %v), want (%q, %q, %v)",
-				c.in, name, rest, ok, c.name, c.rest, c.ok)
-		}
-	}
 }
 
 // コマンドはエージェントへ流さない。流してから判断させると、止めたいという
@@ -189,7 +163,7 @@ func TestClearRemovesTheHistory(t *testing.T) {
 	}
 	// 実測値が無くなったので、使用量は不明へ戻っていること。
 	if again.ContextTokens != 0 {
-		t.Errorf("文脈使用量が %d のまま", again.ContextTokens)
+		t.Errorf("コンテキスト使用量が %d のまま", again.ContextTokens)
 	}
 }
 

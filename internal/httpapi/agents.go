@@ -26,7 +26,13 @@ type agentBody struct {
 	Options      map[string]any `json:"options"`
 }
 
-func (b *agentBody) into(a *agent.Agent) {
+// into は受け取った内容を定義へ写す。local が真ならセッション固有の定義で、
+// 規定エージェントの決まりは持ち込まない。
+func (b *agentBody) into(a *agent.Agent) { b.write(a, false) }
+
+func (b *agentBody) intoLocal(a *agent.Agent) { b.write(a, true) }
+
+func (b *agentBody) write(a *agent.Agent, local bool) {
 	a.Name = b.Name
 	a.Description = b.Description
 	a.Model = b.Model
@@ -40,8 +46,9 @@ func (b *agentBody) into(a *agent.Agent) {
 	a.Color = b.Color
 	a.Options = b.Options
 	// 規定エージェントの Tier は変えられない。入口が 2 つある状態にも、
-	// 入口が 1 つも無い状態にもしないため。
-	if a.ID == agent.DefaultID {
+	// 入口が 1 つも無い状態にもしないため。会話の中の同名は別物なので、
+	// そこには効かせない。
+	if !local && a.ID == agent.DefaultID {
 		a.Tier = 0
 	}
 }

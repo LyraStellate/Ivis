@@ -47,6 +47,10 @@ vi.mock('./lib/api.js', () => ({
   respondApproval: vi.fn(async () => null),
   reloadDefs: vi.fn(async () => null),
   listSkills: vi.fn(async () => []),
+  listCommands: vi.fn(async () => [
+    { name: 'compact', desc: 'これまでのやり取りをまとめる' },
+    { name: 'help', desc: '使えるコマンドを出す' },
+  ]),
   listTools: vi.fn(async () => []),
   listModels: vi.fn(async () => []),
   getConfig: vi.fn(async () => ({})),

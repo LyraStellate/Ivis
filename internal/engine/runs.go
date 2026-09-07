@@ -32,8 +32,8 @@ func (r *Runs) Begin(id string, cancel context.CancelFunc) bool {
 	return true
 }
 
-// End は占有を解き、中断関数を呼ぶ。呼ぶのは、途中で抜けた場合に文脈が
-// 漏れ続けるのを避けるためである。
+// End は占有を解き、中断関数を呼ぶ。呼ぶのは、途中で抜けた場合に中断が
+// 呼ばれないまま残るのを避けるためである。
 func (r *Runs) End(id string) {
 	r.mu.Lock()
 	cancel, ok := r.m[id]

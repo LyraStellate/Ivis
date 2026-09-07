@@ -1,7 +1,7 @@
 // Package engine は 1 ターンの実行ループを回す。
 //
 // スキル本文は毎ターンのプロンプトに載せない。載せればスキルが増えるほど
-// 入力が膨らみ、ローカルモデルの限られた文脈長をすぐ食い潰す。載せるのは
+// 入力が膨らみ、ローカルモデルの限られたコンテキスト長をすぐ食い潰す。載せるのは
 // 名前と説明の一覧だけで、本文はモデルが必要と判断した時点で読み込む。
 package engine
 
@@ -80,9 +80,19 @@ const (
 	EvtQuestion      = "question"
 	EvtDelegateStart = "delegate_start"
 	EvtDelegateEnd   = "delegate_end"
-	EvtError         = "error"
-	EvtUsage         = "usage"
-	EvtDone          = "done"
+	// チームセッションの手番 (#640275)。委譲と違って入れ子にならず横に
+	// 並ぶので、深さ (Depth) は使わない。
+	EvtTurnStart   = "turn_start"
+	EvtTurnEnd     = "turn_end"
+	EvtTeamMessage = "team_message"
+	EvtError       = "error"
+	// EvtNotice は失敗ではない知らせ。コンテキストを圧縮したことなど、
+	// 会話の見え方が変わったことを伝える (#486237)。
+	EvtNotice = "notice"
+	// EvtStage はいま何を待っているか。始まりで名前を、終わりで空を流す。
+	EvtStage = "stage"
+	EvtUsage = "usage"
+	EvtDone  = "done"
 )
 
 // Event はストリームで UI へ送る 1 件。
@@ -106,9 +116,32 @@ type Event struct {
 	Approval *ApprovalRequest `json:"approval,omitempty"`
 	Question *Question        `json:"question,omitempty"`
 	// PromptTokens はモデルへ送った入力のトークン数、ContextLimit はその
-	// モデルの文脈長。分母が分からないときは 0 で、画面は割合を出さない。
+	// モデルのコンテキスト長。分母が分からないときは 0 で、画面は割合を出さない。
 	PromptTokens int `json:"prompt_tokens,omitempty"`
 	ContextLimit int `json:"context_limit,omitempty"`
+	// Stage はいま何をしているか。空文字は「何もしていない」を表し、印を
+	// 下ろすのに使う。何も届かない時間に、待っているものの名前を出すため
+	// だけのもので、会話には残らない (#486237)。
+	Stage string `json:"stage,omitempty"`
+	// Done は Stage の進み具合。分母を持てるものが無いので、割合ではなく
+	// できた量 (要約なら文字数) をそのまま出す。
+	Done int `json:"done,omitempty"`
+
+	// ここから下はチームセッションだけが使う (#640275)。
+	//
+	// To は宛先のメンバー。送り手は AgentID である。
+	To string `json:"to,omitempty"`
+	// Why は手番を取ることになった理由、Did はその手番でやったこと。
+	// 本文 (Text) と分けて流すのは、画面が別々に描くためである。
+	Why string `json:"why,omitempty"`
+	Did string `json:"did,omitempty"`
+	// Decision は依頼への返答の可否。
+	Decision string `json:"decision,omitempty"`
+	// Relation は送り手から宛先への関係 (報告 / 依頼 / 指示)。
+	Relation string `json:"relation,omitempty"`
+	// Queued は手番の行列に残っている数。何度も手番が入れ替わる間、画面には
+	// 長く何も届かないので、あと何人待っているかが唯一の手がかりになる。
+	Queued int `json:"queued,omitempty"`
 }
 
 // reportedError は、その失敗が既にイベントとして流されたことを示す包み。
@@ -170,15 +203,15 @@ type Engine struct {
 	// ループではなくエンジンが持つ。
 	Procs *tools.ProcSet
 
-	// ctxLen はモデルごとの文脈長。毎ターン提供元へ問い合わせるほど変わる
+	// ctxLen はモデルごとのコンテキスト長。毎ターン提供元へ問い合わせるほど変わる
 	// ものではない。ゼロ値で使えるので初期化は要らない。
 	ctxLen sync.Map
 }
 
-// noteUsage は 1 ターンで使った文脈の量を記録し、画面へ流す。
+// noteUsage は 1 ターンで使ったコンテキストの量を記録し、画面へ流す。
 //
 // 委譲された子では記録しない。見せているのは利用者が次に送れる量であり、
-// 子は別の文脈で走るためである。
+// 子は別のコンテキストで走るためである。
 func (e *Engine) noteUsage(ctx context.Context, rc *runCtx, u *provider.Usage) {
 	if u == nil || rc.depth != 0 {
 		return
@@ -190,7 +223,7 @@ func (e *Engine) noteUsage(ctx context.Context, rc *runCtx, u *provider.Usage) {
 	rc.emit(Event{Type: EvtUsage, PromptTokens: u.PromptTokens, ContextLimit: limit})
 }
 
-// contextLimit は割合の分母を返す。実際に使う文脈長そのものである。
+// contextLimit は割合の分母を返す。実際に使うコンテキスト長そのものである。
 //
 // モデルが持てる最大値ではなく、こちらが渡す値を分母にする。渡した値より
 // 大きい分母で割ると、まだ余裕があるように見えているうちに溢れる。
@@ -198,7 +231,7 @@ func (e *Engine) contextLimit(ctx context.Context, a *agent.Agent) int {
 	return e.numCtx(ctx, a)
 }
 
-// numCtx はそのエージェントの生成で使う文脈長を返す。
+// numCtx はそのエージェントの生成で使うコンテキスト長を返す。
 //
 // 明示しないと提供元の既定 (Ollama は 4096) が使われる。ツールの結果を
 // 何度も往復する使い方では、それはすぐに埋まる。埋まると古い側から黙って
@@ -221,7 +254,7 @@ func (e *Engine) numCtx(ctx context.Context, a *agent.Agent) int {
 	return want
 }
 
-// modelContext はモデル自身が持つ文脈長を返す。分からなければ 0。
+// modelContext はモデル自身が持つコンテキスト長を返す。分からなければ 0。
 func (e *Engine) modelContext(ctx context.Context, model string) int {
 	if v, ok := e.ctxLen.Load(model); ok {
 		return v.(int)
@@ -254,7 +287,7 @@ func numOption(v any) int {
 // エージェントの一覧は定義群から毎回組み直す。派生ファイルとして持たせると、
 // 定義と一覧が食い違ったときにどちらが正か決められなくなる (#528664)。
 func systemPrompt(a *agent.Agent, skills []*skillreg.Skill, delegates []*agent.Agent,
-	workspace string, now time.Time) string {
+	workspace string, now time.Time, teamNote string) string {
 	var b strings.Builder
 	b.WriteString(strings.TrimSpace(a.Instructions))
 	b.WriteString("\n\n")
@@ -279,6 +312,9 @@ func systemPrompt(a *agent.Agent, skills []*skillreg.Skill, delegates []*agent.A
 		}
 	}
 	b.WriteString("\n" + autonomy(a.Allows("ask_user")))
+
+	// チームの名簿と進め方。会話の形態が違えば、進め方の説明も違う。
+	b.WriteString(teamNote)
 
 	if len(delegates) > 0 {
 		fmt.Fprintf(&b, "\nあなたは Tier %d です。仕事を任せられるのは自分より下位 "+
@@ -355,6 +391,13 @@ func toProviderMessages(history []*store.Message) []provider.Message {
 				Content:   m.Content,
 				ToolCalls: m.ToolCalls,
 				ToolName:  m.ToolName,
+			})
+		case store.RoleSummary:
+			// 要約は依頼ではなく前提なので、利用者の発言としては渡さない。
+			// 何の文章かを書き添えないと、モデルはこれを新しい指示として読む。
+			out = append(out, provider.Message{
+				Role:    provider.RoleSystem,
+				Content: summaryHeader + m.Content,
 			})
 		}
 	}

@@ -1,5 +1,5 @@
 <script>
-  // 文脈の残量。書く場所のすぐ隣に置く。あと何を送れるかは、書く前に
+  // コンテキストの残量。書く場所のすぐ隣に置く。あと何を送れるかは、書く前に
   // 知りたいことだからである。
   let { tokens = 0, limit = 0 } = $props()
 
@@ -14,7 +14,7 @@
   // 余裕がある間は目立たせない。残りが少なくなってはじめて色で伝える。
   const tone = $derived(ratio == null ? '' : ratio >= 0.9 ? 'full' : ratio >= 0.7 ? 'near' : '')
   const label = $derived(
-    ratio == null ? '' : `文脈 ${tokens.toLocaleString()} / ${limit.toLocaleString()} トークン (${pct}%)`,
+    ratio == null ? '' : `コンテキスト ${tokens.toLocaleString()} / ${limit.toLocaleString()} トークン (${pct}%)`,
   )
 </script>
 

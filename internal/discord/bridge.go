@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/LyraStellate/Ivis/internal/agent"
+	"github.com/LyraStellate/Ivis/internal/command"
 	"github.com/LyraStellate/Ivis/internal/config"
 	"github.com/LyraStellate/Ivis/internal/engine"
 	"github.com/LyraStellate/Ivis/internal/store"
@@ -29,8 +30,10 @@ type Deps struct {
 	Runs *engine.Runs
 	// Run は 1 ターンを実行する。既定では engine.Engine.Run。
 	Run func(ctx context.Context, sessionID, text string, emit engine.Emit) error
-	Now func() time.Time
-	Log func(format string, args ...any)
+	// Compact は会話のコンテキストを圧縮する。既定では engine.Engine.Compact。
+	Compact func(ctx context.Context, sessionID, instructions string) (*engine.CompactResult, error)
+	Now     func() time.Time
+	Log     func(format string, args ...any)
 }
 
 // Bridge は Discord と Ivis を繋ぐ。
@@ -96,7 +99,7 @@ func (b *Bridge) serve(ctx context.Context, api API, in incoming) {
 	}
 	// コマンドかどうかを先に見る。エージェントへ流してから判断させると、
 	// 止めたいときに、止めてほしいという依頼が生成の順番待ちに並ぶ。
-	if name, arg, ok := parseCommand(text); ok {
+	if name, arg, ok := command.Parse(text); ok {
 		b.reply(ctx, api, in, b.runCommand(ctx, in, name, arg))
 		return
 	}
@@ -187,7 +190,7 @@ func (b *Bridge) session(ctx context.Context, api API, in incoming) (*store.Sess
 		}
 		return nil, err
 	}
-	_ = os.MkdirAll(b.deps.Cfg.SessionWorkspace(sess.ID), 0o755)
+	_ = os.MkdirAll(b.deps.Cfg.SessionWorkspace(sess.Kind, sess.ID), 0o755)
 	return sess, nil
 }
 

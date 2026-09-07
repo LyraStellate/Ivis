@@ -50,7 +50,8 @@ type Request struct {
 	Messages []Message
 	Tools    []ToolDef
 	Options  map[string]any
-	// Think はモデルの推論機能を使うか。対応しないモデルでは失敗する。
+	// Think はモデルの推論機能を使うか。対応しないモデルで真にすると失敗する。
+	// 偽も提供元へ明示して伝えるため、既定で考えるモデルでも止まる。
 	Think bool
 }
 
@@ -87,7 +88,7 @@ type Event struct {
 	Err       error
 	// Usage は EventDone に載る。得られない提供元では nil。
 	Usage *Usage
-	// Truncated は EventDone に載る。文脈が尽きて生成が打ち切られたこと。
+	// Truncated は EventDone に載る。コンテキストが尽きて生成が打ち切られたこと。
 	// これを伝えないと、途中で終わった応答が答え終えたものと区別できない。
 	Truncated bool
 }
@@ -108,7 +109,7 @@ type Provider interface {
 	Chat(ctx context.Context, req Request) (<-chan Event, error)
 	// Models は利用可能なモデルの一覧。
 	Models(ctx context.Context) ([]Model, error)
-	// ContextLength はモデルが持つ文脈長を返す。分からなければ 0 を返す。
+	// ContextLength はモデルが持つコンテキスト長を返す。分からなければ 0 を返す。
 	ContextLength(ctx context.Context, model string) (int, error)
 	// Health は提供元に到達できるかを確かめる。
 	Health(ctx context.Context) error

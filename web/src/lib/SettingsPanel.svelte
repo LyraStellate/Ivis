@@ -158,8 +158,10 @@
           <p class="hint">
             この端末だけで使うなら <span class="mono">127.0.0.1:8317</span>。他の端末から
             開くなら <span class="mono">0.0.0.0:8317</span> ですべての経路に開くか、
-            <span class="mono">100.x.y.z:8317</span> のように VPN のアドレスだけに絞ります。
-            変更は再起動後に効きます。
+            VPN のアドレスだけに絞ります。VPN の場合は
+            <span class="mono">100.64.0.1:8317</span> のように、この端末が VPN 上で
+            持っている実際のアドレスを書いてください (<span class="mono">100.x.y.z</span>
+            のような書き方はそのままでは使えません)。変更は再起動後に効きます。
           </p>
           {#if openToNetwork}
             <p class="err">
@@ -194,11 +196,9 @@
             {/if}
           {/if}
           <p class="hint">
-            開発者ポータルで <span class="mono">Message Content Intent</span> を有効にしてください。
-            有効にしないと、メンションは届いても本文が空で来ます。招待には
-            メッセージの送信・履歴の閲覧に加えて
-            <span class="mono">applications.commands</span> が要ります。無いと
-            <span class="mono">/stop</span> を登録できません。
+            開発者ポータルで <span class="mono">Message Content Intent</span> を有効にして
+            ください。有効にしないと、メンションは届いても本文が空で来ます。招待に
+            要るのはメッセージの送信と履歴の閲覧だけです。
           </p>
           <p class="hint">
             チャンネルごとに 1 つの会話ができ、一覧の先頭に並びます。返事は
@@ -277,14 +277,14 @@
             <span>確認を求めるツールの実行前に確認する</span>
           </label>
           <p class="hint">
-            文脈長は 1 回の生成でモデルへ渡せる量です。小さいと、途中で古い側から
+            コンテキスト長は 1 回の生成でモデルへ渡せる量です。小さいと、途中で古い側から
             捨てられて応答が途中で終わります。大きいほど記憶に載る量が増えます。
             エージェント側の options に num_ctx があれば、そちらが優先されます。
           </p>
           <div class="nums">
             <label>1 ターンのツール呼び出し上限
               <input type="number" bind:value={cfg.max_iterations} /></label>
-            <label>文脈長 (トークン)
+            <label>コンテキスト長 (トークン)
               <input type="number" bind:value={cfg.context_tokens} /></label>
             <label>委譲の深さの上限
               <input type="number" bind:value={cfg.max_delegation_depth} /></label>

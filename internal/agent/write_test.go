@@ -105,3 +105,51 @@ func TestBootstrap(t *testing.T) {
 		t.Errorf("利用者の編集が上書きされました: %+v", r)
 	}
 }
+
+// セッション固有の定義は Tier 0 を持てる。共通で 0 を規定エージェントだけに
+// 絞っているのは、会話の入口が 2 つある状態を定義の書き換えで作れないように
+// するためだった (#528664)。チームの入口は窓口として会話が明示して持つので、
+// そこへ同じ制限を掛ける理由がない (#731906)。
+func TestLocalDefinitionsMayBeTierZero(t *testing.T) {
+	peer := &Agent{ID: "peer", Model: "m", Tier: 0}
+
+	if err := Validate(peer); err == nil {
+		t.Error("共通で Tier 0 が通ってしまう")
+	}
+	if err := ValidateLocal(peer); err != nil {
+		t.Errorf("会話の中で Tier 0 が通らない: %v", err)
+	}
+	if err := ValidateLocal(&Agent{ID: "peer", Model: "m", Tier: -1}); err == nil {
+		t.Error("負の Tier が通ってしまう")
+	}
+
+	dir := t.TempDir()
+	if err := SaveLocal(dir, peer); err != nil {
+		t.Fatalf("書き出せない: %v", err)
+	}
+	found, errs := ReadDir(dir)
+	if len(errs) != 0 || len(found) != 1 {
+		t.Fatalf("読み直せない: %v %v", found, errs)
+	}
+	if found[0].Tier != 0 {
+		t.Errorf("Tier = %d, want 0", found[0].Tier)
+	}
+}
+
+// 共通の一覧では、ファイルに 0 と書かれていても規定エージェント以外は
+// 1 へ引き上げる。入口を 2 つ作れないようにするため (#528664)。
+func TestCommonSetStillForbidsTierZero(t *testing.T) {
+	dir := t.TempDir()
+	if err := SaveLocal(dir, &Agent{ID: "peer", Model: "m", Tier: 0}); err != nil {
+		t.Fatal(err)
+	}
+	s := NewSet()
+	s.Load([]string{dir})
+	a, ok := s.Get("peer")
+	if !ok {
+		t.Fatal("読めていない")
+	}
+	if a.Tier != MinUserTier {
+		t.Errorf("Tier = %d, want %d", a.Tier, MinUserTier)
+	}
+}
