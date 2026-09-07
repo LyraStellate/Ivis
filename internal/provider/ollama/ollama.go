@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -62,8 +63,9 @@ type chatRequest struct {
 	Tools    []chatToolDef  `json:"tools,omitempty"`
 	Stream   bool           `json:"stream"`
 	Options  map[string]any `json:"options,omitempty"`
-	// Think は省略と false を区別する。対応しないモデルへ false を送ると
-	// 断られる実装があるため、使わないときは項目ごと出さない。
+	// Think は必ず明示して送る。省くとモデルの既定に従うため、切ってあっても
+	// 既定で考えるモデルは考え続ける。false を断る実装のために項目を落とせる
+	// よう、省略と false は区別できる形にしてある。
 	Think *bool `json:"think,omitempty"`
 }
 
@@ -71,7 +73,7 @@ type chatChunk struct {
 	Message chatMessage `json:"message"`
 	Done    bool        `json:"done"`
 	Error   string      `json:"error"`
-	// DoneReason は終わり方。"length" は文脈が尽きて打ち切られたことを指す。
+	// DoneReason は終わり方。"length" はコンテキストが尽きて打ち切られたことを指す。
 	DoneReason string `json:"done_reason"`
 	// 最後のチャンクにだけ載る。入力に何トークン使ったかの実測値。
 	PromptEvalCount int `json:"prompt_eval_count"`
@@ -81,10 +83,10 @@ type chatChunk struct {
 // Chat は生成を開始する。返されたチャネルは必ず done か error で終わる。
 func (c *Client) Chat(ctx context.Context, req provider.Request) (<-chan provider.Event, error) {
 	body := chatRequest{Model: req.Model, Stream: true, Options: req.Options}
-	if req.Think {
-		think := true
-		body.Think = &think
-	}
+	// 使うかどうかを毎回はっきり伝える。項目を出さないと Ollama はモデルの
+	// 既定を採るので、推論を切った設定が既定で考えるモデルに効かない。
+	think := req.Think
+	body.Think = &think
 	for _, m := range req.Messages {
 		cm := chatMessage{Role: m.Role, Content: m.Content, ToolName: m.ToolName}
 		for _, tc := range m.ToolCalls {
@@ -104,6 +106,29 @@ func (c *Client) Chat(ctx context.Context, req provider.Request) (<-chan provide
 		body.Tools = append(body.Tools, td)
 	}
 
+	resp, err := c.post(ctx, body)
+	if err != nil {
+		// 推論を持たないモデルへ think を送ると断る実装がある。切ってある
+		// ときに限り、項目を落として送り直す。使わないと言っただけで会話が
+		// 始まらないのは筋が通らない。
+		var unsupported *provider.ThinkingUnsupportedError
+		if !req.Think && errors.As(err, &unsupported) {
+			body.Think = nil
+			resp, err = c.post(ctx, body)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	out := make(chan provider.Event, 32)
+	go c.stream(ctx, resp, req.Model, out)
+	return out, nil
+}
+
+// post は 1 回の生成要求を送り、応答の本体を返す。送り直すことがあるので
+// 切り出してある。返した応答の本体を閉じるのは呼び出し側。
+func (c *Client) post(ctx context.Context, body chatRequest) (*http.Response, error) {
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
@@ -121,12 +146,9 @@ func (c *Client) Chat(ctx context.Context, req provider.Request) (<-chan provide
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
-		return nil, classify(req.Model, resp.StatusCode, raw)
+		return nil, classify(body.Model, resp.StatusCode, raw)
 	}
-
-	out := make(chan provider.Event, 32)
-	go c.stream(ctx, resp, req.Model, out)
-	return out, nil
+	return resp, nil
 }
 
 func (c *Client) stream(ctx context.Context, resp *http.Response, model string, out chan<- provider.Event) {
@@ -296,13 +318,13 @@ func classify(model string, status int, raw []byte) error {
 
 // showResponse は /api/show の必要な部分だけを受ける。
 type showResponse struct {
-	// ModelInfo はアーキテクチャ名を接頭辞に持つ雑多な値の集まりで、文脈長は
+	// ModelInfo はアーキテクチャ名を接頭辞に持つ雑多な値の集まりで、コンテキスト長は
 	// "<arch>.context_length" という名前で入る。名前が固定でないため、
 	// 接尾辞で探す。
 	ModelInfo map[string]any `json:"model_info"`
 }
 
-// ContextLength はモデルが持つ文脈長を返す。分からなければ 0 を返す。
+// ContextLength はモデルが持つコンテキスト長を返す。分からなければ 0 を返す。
 // 分母が無いときに割合を出すと嘘になるので、呼び出し側はそれを見て諦める。
 func (c *Client) ContextLength(ctx context.Context, model string) (int, error) {
 	body, err := json.Marshal(map[string]string{"model": model})
