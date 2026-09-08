@@ -32,7 +32,14 @@ type turn struct {
 	Did  string
 	// Rel は From から To への関係。依頼なら、返答に可否が要る。
 	Rel string
+	// auto はこの手番が、engine が繕った返信から始まったこと。繕いから
+	// 始まった手番をさらに繕うと、何も進まないまま往復し続ける (#640275)。
+	auto bool
 }
+
+// AutoNote は engine が繕った返信に付ける印。人にもモデルにも、これが本人の
+// 言葉でないことが分かるようにする。
+const AutoNote = "(自動)"
 
 // runTeam はチームセッションの 1 ラウンドを回す。
 func (e *Engine) runTeam(ctx context.Context, sess *store.Session, userText string, emit Emit) error {
@@ -108,7 +115,7 @@ func (e *Engine) runTeam(ctx context.Context, sess *store.Session, userText stri
 		emit(Event{Type: EvtTurnStart, AgentID: m.ID, Text: t.From,
 			Relation: t.Rel, Queued: len(queue)})
 
-		sent, err := e.runTurn(ctx, sess, roster, m.ID, t, emit)
+		sent, last, err := e.runTurn(ctx, sess, roster, m.ID, t, emit)
 		queue = append(queue, sent...)
 
 		emit(Event{Type: EvtTurnEnd, AgentID: m.ID, Queued: len(queue)})
@@ -122,13 +129,28 @@ func (e *Engine) runTeam(ctx context.Context, sess *store.Session, userText stri
 			if !Reported(err) {
 				emit(Event{Type: EvtError, AgentID: m.ID, Error: err.Error(), Kind: KindOf(err)})
 			}
-			if t.From != "" {
-				queue = append(queue, turn{
-					From: m.ID, To: t.From, Rel: roster.Relation(m.ID, t.From),
-					Why:  fmt.Sprintf("%s から受けた仕事の途中で失敗しました。", t.From),
-					Did:  "手番が最後まで進みませんでした。",
-					Body: "実行が失敗しました: " + err.Error(),
-				})
+			if next, ok := e.fillIn(ctx, sess, roster, m.ID, t,
+				fmt.Sprintf("%s から受けた仕事の途中で失敗しました。", t.From),
+				"手番が最後まで進みませんでした。",
+				"実行が失敗しました: "+err.Error(), emit); ok {
+				queue = append(queue, next)
+			}
+			continue
+		}
+
+		// 誰にも渡さずに終わった手番。依頼した側は、返事が来ないまま待ち
+		// 続けることになる。ラウンドはそこで空になって終わり、頼んだ仕事が
+		// どうなったのかは誰にも分からない。こちらで返す (#640275)。
+		if len(sent) == 0 {
+			body := strings.TrimSpace(last)
+			if body == "" {
+				body = "この手番からは何も返りませんでした。同じ頼み方では進まないので、" +
+					"内容を分けるか、別の相手に頼んでください。"
+			}
+			if next, ok := e.fillIn(ctx, sess, roster, m.ID, t,
+				fmt.Sprintf("%s AI が返信を送らないまま手番を終えたため、Ivis が代わりに返しています。", AutoNote),
+				"", body, emit); ok {
+				queue = append(queue, next)
 			}
 		}
 	}
@@ -136,6 +158,35 @@ func (e *Engine) runTeam(ctx context.Context, sess *store.Session, userText stri
 	e.maybeCompact(ctx, sess.ID, emit)
 	emit(Event{Type: EvtDone})
 	return nil
+}
+
+// fillIn は止まった手番の代わりに、依頼元へ 1 通返す。
+//
+// 返せるのは、その手番を誰かが始めた場合だけである。利用者から始まった手番が
+// 何も返さないのは、ラウンドがそこで終わるというだけで、待っている相手が
+// 居ない。
+//
+// 繕いから始まった手番はもう繕わない。繕いに繕いを返すと、何も進まないまま
+// 上限まで往復する。
+func (e *Engine) fillIn(ctx context.Context, sess *store.Session, roster *team.Roster,
+	self string, in turn, why, did, body string, emit Emit) (turn, bool) {
+	// 繕いへの返事が無いのは、ふつうの終わり方である。報告を読んで言うことが
+	// 無ければ、そこで枝が閉じるのが正しい。知らせを出すと雑音になる。
+	if in.From == "" || in.auto {
+		return turn{}, false
+	}
+	emit(Event{Type: EvtNotice, Text: fmt.Sprintf(
+		"%s が %s へ返信しないまま手番を終えたため、Ivis が代わりに返しました。", self, in.From)})
+
+	next, err := e.saveTeamMessage(ctx, sess.ID, self, roster, tools.TeamMessage{
+		To: in.From, Why: why, Did: did, Body: body,
+	}, emit)
+	if err != nil {
+		emit(Event{Type: EvtError, AgentID: self, Error: err.Error()})
+		return turn{}, false
+	}
+	next.auto = true
+	return next, true
 }
 
 // waitingFor は残っている宛先を並べる。
@@ -152,12 +203,12 @@ func waitingFor(queue []turn) string {
 
 // runTurn は 1 人の手番を回し、その手番で送られたメッセージを返す。
 func (e *Engine) runTurn(ctx context.Context, sess *store.Session, roster *team.Roster,
-	self string, in turn, emit Emit) ([]turn, error) {
+	self string, in turn, emit Emit) ([]turn, string, error) {
 	m, _ := roster.Get(self)
 
 	history, err := e.Store.TeamMessages(ctx, sess.ID, self)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	var sent []turn
@@ -185,8 +236,8 @@ func (e *Engine) runTurn(ctx context.Context, sess *store.Session, roster *team.
 		return nil
 	}
 
-	_, err = e.loop(ctx, rc)
-	return sent, err
+	last, err := e.loop(ctx, rc)
+	return sent, last, err
 }
 
 // saveTeamMessage は 1 通を記録し、画面へ流し、次の手番の形にして返す。
@@ -289,7 +340,7 @@ func (e *Engine) teamNote(ctx context.Context, rc *runCtx) string {
 	}
 	var b strings.Builder
 	b.WriteString(rc.roster.Roll(rc.agent.ID))
-	b.WriteString(team.Guide(rc.agent.ID, rc.agent.ID == rc.roster.LeadID))
+	b.WriteString(team.Guide(rc.roster, rc.agent.ID))
 	b.WriteString(e.ticketNote(ctx, rc))
 	return b.String()
 }

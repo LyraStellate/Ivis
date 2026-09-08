@@ -165,10 +165,60 @@ func TestRollNamesWhatEachCanDo(t *testing.T) {
 
 // 窓口だけが宛先を委ねられる。誰でも使えると、決めないまま回し続ける。
 func TestGuideMentionsAnyoneOnlyForLead(t *testing.T) {
-	if strings.Contains(Guide("hand", false), Anyone) {
+	cfg, set, sess := setup(t)
+	r := Load(cfg, set, sess)
+
+	if strings.Contains(Guide(r, "hand"), Anyone) {
 		t.Error("窓口でない相手に \"*\" の使い方を教えている")
 	}
-	if !strings.Contains(Guide("boss", true), Anyone) {
+	if !strings.Contains(Guide(r, "boss"), Anyone) {
 		t.Error("窓口に \"*\" の使い方が伝わっていない")
+	}
+}
+
+// 下位を持つ相手には、上司としての進め方を渡す。全員に同じ文を渡すと、
+// 指示を出す側まで「勝手に始めない」「確認を取る」と読み、部下に許可を
+// 求め始める。
+func TestGuideDependsOnPosition(t *testing.T) {
+	cfg, set, sess := setup(t)
+	r := Load(cfg, set, sess)
+
+	// boss (Tier 1) の下には hand と scout (Tier 2) が居る。
+	boss := Guide(r, "boss")
+	for _, want := range []string{"2 人の下位", "上司", "許可や確認を求めない", "指示は依頼ではありません"} {
+		if !strings.Contains(boss, want) {
+			t.Errorf("上司向けの進め方に %q が無い:\n%s", want, boss)
+		}
+	}
+	if strings.Contains(boss, "勝手に始めない") {
+		t.Error("下位を持つ相手に、部下向けの心得を渡している")
+	}
+
+	// hand (Tier 2) の下には誰も居ない。
+	hand := Guide(r, "hand")
+	if !strings.Contains(hand, "下位は居ません") {
+		t.Errorf("部下向けの進め方になっていない:\n%s", hand)
+	}
+	if strings.Contains(hand, "上司です") {
+		t.Error("下位の居ない相手を上司として扱っている")
+	}
+	if !strings.Contains(hand, "窓口は boss") {
+		t.Error("全体の判断がどこにあるかが伝わっていない")
+	}
+}
+
+func TestSubordinates(t *testing.T) {
+	cfg, set, sess := setup(t)
+	r := Load(cfg, set, sess)
+
+	var got []string
+	for _, m := range r.Subordinates("boss") {
+		got = append(got, m.ID)
+	}
+	if strings.Join(got, ",") != "hand,scout" {
+		t.Errorf("下位 = %v", got)
+	}
+	if n := len(r.Subordinates("hand")); n != 0 {
+		t.Errorf("同位を下位として数えている: %d", n)
 	}
 }

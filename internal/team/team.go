@@ -220,20 +220,66 @@ func describe(a *agent.Agent) string {
 	return strings.Join(strings.Fields(a.Description), " ")
 }
 
-// Guide はチームでの進め方。名簿とは別に書くのは、名簿が会話ごとに変わる
-// のに対し、こちらは常に同じだからである。
-func Guide(self string, canOrderAnyone bool) string {
+// Subordinates は自分より下位のメンバーを返す。
+func (r *Roster) Subordinates(self string) []*Member {
+	me, ok := r.Get(self)
+	if !ok {
+		return nil
+	}
+	var out []*Member
+	for _, m := range r.Members {
+		if m.Tier > me.Tier {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// Guide はチームでの進め方。立場によって書き分ける。
+//
+// 全員に同じ文を渡すと、下位を持つ相手まで「勝手に始めない」「確認を取る」と
+// 読み、部下に許可を求め始める。Tier は指示できる範囲を表すのだから、指示を
+// 出す側と受ける側では、進め方の指示そのものが違っていなければならない。
+func Guide(r *Roster, self string) string {
+	me, ok := r.Get(self)
+	if !ok {
+		return ""
+	}
+	under := r.Subordinates(self)
+	isLead := self == r.LeadID
+
 	var b strings.Builder
 	b.WriteString("\nチームでの進め方:\n")
 	b.WriteString("- 相手はこの会話のやり取りを見られません。送る内容は、それ 1 通で読めるように書いてください。\n")
 	b.WriteString("- send_message には、なぜそれをすることになったか (誰に何を頼まれたか)、やったこと、\n")
 	b.WriteString("  そして相手へのメッセージの 3 つを必ず入れてください。相手が受け取るのはそれだけです。\n")
 	b.WriteString("- 同位からの依頼には、受諾か却下かを必ず添えて返します。却下する場合は理由を書いてください。\n")
-	b.WriteString("- 上位への報告に応答の義務はありません。読んで、必要があれば動いてください。\n")
 	b.WriteString("- 手番を終えるときは、誰かへ送るか、何も送らずに終えるかのどちらかです。\n")
-	b.WriteString("- 頼まれていないことを勝手に始めないでください。手が空いているなら、その旨を上位へ報告します。\n")
-	if canOrderAnyone {
-		b.WriteString("- 宛先が決められないときは \"*\" を指定できます。窓口が引き受けて回します。\n")
+
+	if len(under) > 0 {
+		// 下位を持つ側。上司として振る舞わせる。
+		fmt.Fprintf(&b, "\nあなたは %d 人の下位を持ちます。あなたはその %d 人の上司です。\n",
+			len(under), len(under))
+		b.WriteString("- 仕事は分けて、下位へ指示してください。指示は依頼ではありません。相手は断れません。\n")
+		b.WriteString("- 下位に許可や確認を求めないでください。やってよいかを決めるのはあなたです。\n")
+		b.WriteString("  「〜してもよいですか」「〜で進めてよろしいでしょうか」と部下に問うのは、\n")
+		b.WriteString("  指示ではなく責任の押し付けです。何をどこまでやるかを決めて、そのまま伝えてください。\n")
+		b.WriteString("- 自分でやったほうが早い小さな作業まで配らないこと。分ける意味のある単位で渡します。\n")
+		b.WriteString("- 下位からの報告には応答の義務はありません。読んで、次の指示が要るときだけ出してください。\n")
+		b.WriteString("- 上がってきた成果は、あなたが確かめて受け取ります。妥当でなければ、直す点を挙げて指示し直してください。\n")
+	} else {
+		b.WriteString("\nあなたに下位は居ません。受けた仕事は自分で最後までやり切ります。\n")
+		b.WriteString("- 頼まれていないことを勝手に始めないでください。手が空いているなら、その旨を上位へ報告します。\n")
+		b.WriteString("- 指示は断れません。やり方に問題があるなら、やったうえで報告に書いてください。\n")
+	}
+
+	if isLead {
+		b.WriteString("\nあなたはこの会話の窓口です。\n")
+		b.WriteString("- 利用者の依頼はまずあなたに届きます。全体をどう進めるかを決めるのはあなたです。\n")
+		b.WriteString("- 宛先が決められないときは \"*\" を指定できますが、それは「決められなかった」記録として残り、\n")
+		b.WriteString("  そこで話が止まります。できるかぎり相手を名指ししてください。\n")
+	} else if me.Tier > 0 {
+		fmt.Fprintf(&b, "\nこの会話の窓口は %s です。全体の判断はそちらにあります。\n", r.LeadID)
 	}
 	return b.String()
 }

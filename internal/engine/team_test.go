@@ -106,9 +106,11 @@ func TestRoundRunsTurnsInOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// hand と scout は何も返さずに終わるので、engine が代わりに lead へ
+	// 返す。その分だけ lead の手番が後ろに 2 つ増える。
 	got := strings.Join(f.turns(), ",")
-	if got != "lead,hand,scout" {
-		t.Errorf("手番の順 = %s, want lead,hand,scout", got)
+	if got != "lead,hand,scout,lead,lead" {
+		t.Errorf("手番の順 = %s, want lead,hand,scout,lead,lead", got)
 	}
 	if f.events[len(f.events)-1].Type != EvtDone {
 		t.Error("ラウンドが終わっていない")
@@ -402,5 +404,165 @@ func TestTranscriptNamesBothEnds(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("まとめる文に %q が無い:\n%s", want, got)
 		}
+	}
+}
+
+// 誰にも渡さずに終わった手番は、engine が依頼元へ返す。返さないと、頼んだ
+// 側は返事の来ないまま待ち、ラウンドはそこで空になって終わる。何を頼んだ
+// 仕事がどうなったのかが誰にも分からない (#640275)。
+func TestSilentTurnIsAnsweredForYou(t *testing.T) {
+	f, sess := teamFixture(t, byMember(func(self string, nth int) []provider.Event {
+		if self == "lead" && nth == 0 {
+			return []provider.Event{sendTo("hand", "調べて"), {Type: provider.EventDone}}
+		}
+		if self == "hand" {
+			// 送らずに本文だけ書いて終える。
+			return []provider.Event{text("調べ終わりました"), {Type: provider.EventDone}}
+		}
+		return done()
+	}))
+	if err := f.eng.Run(context.Background(), sess.ID, "やって", f.emit); err != nil {
+		t.Fatal(err)
+	}
+
+	// lead → hand → (繕い) → lead。
+	if got := strings.Join(f.turns(), ","); got != "lead,hand,lead" {
+		t.Fatalf("手番 = %s, want lead,hand,lead", got)
+	}
+
+	var filled *Event
+	for i, e := range f.events {
+		if e.Type == EvtTeamMessage && e.AgentID == "hand" {
+			filled = &f.events[i]
+		}
+	}
+	if filled == nil {
+		t.Fatal("繕った返信が流れていない")
+	}
+	if filled.To != "lead" {
+		t.Errorf("宛先 = %q, want lead", filled.To)
+	}
+	// 書いた本文はそのまま渡す。捨てると、やった仕事の跡が消える。
+	if !strings.Contains(filled.Text, "調べ終わりました") {
+		t.Errorf("本文が渡っていない: %q", filled.Text)
+	}
+	// 本人の言葉でないことが分かるようにする。
+	if !strings.Contains(filled.Why, AutoNote) {
+		t.Errorf("自動の印が無い: %q", filled.Why)
+	}
+
+	var notice string
+	for _, e := range f.events {
+		if e.Type == EvtNotice {
+			notice = e.Text
+		}
+	}
+	if !strings.Contains(notice, "代わりに返しました") {
+		t.Errorf("繕ったことが利用者に伝わっていない: %q", notice)
+	}
+}
+
+// 何も書かずに終わった手番でも、頼んだ側には何か返る。空のまま黙るのが
+// いちばん困る。
+func TestEmptyTurnStillAnswers(t *testing.T) {
+	f, sess := teamFixture(t, byMember(func(self string, nth int) []provider.Event {
+		if self == "lead" && nth == 0 {
+			return []provider.Event{sendTo("hand", "調べて"), {Type: provider.EventDone}}
+		}
+		if self == "hand" {
+			return []provider.Event{{Type: provider.EventDone}}
+		}
+		return done()
+	}))
+	if err := f.eng.Run(context.Background(), sess.ID, "やって", f.emit); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range f.events {
+		if e.Type == EvtTeamMessage && e.AgentID == "hand" {
+			if !strings.Contains(e.Text, "何も返りませんでした") {
+				t.Errorf("何が起きたのかが伝わらない: %q", e.Text)
+			}
+			return
+		}
+	}
+	t.Error("繕った返信が流れていない")
+}
+
+// 繕いに繕いを返さない。返すと、何も進まないまま上限まで往復する。
+func TestFillInDoesNotChain(t *testing.T) {
+	f, sess := teamFixture(t, byMember(func(self string, nth int) []provider.Event {
+		if self == "lead" && nth == 0 {
+			return []provider.Event{sendTo("hand", "調べて"), {Type: provider.EventDone}}
+		}
+		// 誰も何も送らない。
+		return []provider.Event{text("……"), {Type: provider.EventDone}}
+	}))
+	if err := f.eng.Run(context.Background(), sess.ID, "やって", f.emit); err != nil {
+		t.Fatal(err)
+	}
+	// lead → hand → (繕い) → lead で終わる。lead が受けた繕いをさらに
+	// 繕うと、ここが伸び続ける。
+	if got := strings.Join(f.turns(), ","); got != "lead,hand,lead" {
+		t.Errorf("手番 = %s, want lead,hand,lead", got)
+	}
+	if f.events[len(f.events)-1].Type != EvtDone {
+		t.Error("ラウンドが終わっていない")
+	}
+}
+
+// 手番が失敗したときも、依頼元には理由が返る。
+func TestFailureIsAnsweredOnce(t *testing.T) {
+	f, sess := teamFixture(t, byMember(func(self string, nth int) []provider.Event {
+		if self == "lead" && nth == 0 {
+			return []provider.Event{sendTo("hand", "頼む"), {Type: provider.EventDone}}
+		}
+		if self == "hand" {
+			return []provider.Event{{Type: provider.EventError, Err: errBroken}}
+		}
+		return done()
+	}))
+	if err := f.eng.Run(context.Background(), sess.ID, "やって", f.emit); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	for _, e := range f.events {
+		if e.Type == EvtTeamMessage && e.AgentID == "hand" {
+			n++
+			if !strings.Contains(e.Text, "失敗") {
+				t.Errorf("理由が返っていない: %q", e.Text)
+			}
+		}
+	}
+	if n != 1 {
+		t.Errorf("繕った返信 = %d 件, want 1", n)
+	}
+}
+
+// 上司には上司としての進め方が、部下には部下としての進め方が渡る。
+func TestPromptTellsLeadersToInstruct(t *testing.T) {
+	f, sess := teamFixture(t, byMember(func(self string, nth int) []provider.Event {
+		if self == "lead" && nth == 0 {
+			return []provider.Event{sendTo("hand", "やって"), {Type: provider.EventDone}}
+		}
+		return done()
+	}))
+	if err := f.eng.Run(context.Background(), sess.ID, "やって", f.emit); err != nil {
+		t.Fatal(err)
+	}
+
+	var lead, hand string
+	for _, req := range f.mock.reqs {
+		switch whoAmI(req) {
+		case "lead":
+			lead = req.Messages[0].Content
+		case "hand":
+			hand = req.Messages[0].Content
+		}
+	}
+	if !strings.Contains(lead, "上司") || !strings.Contains(lead, "許可や確認を求めない") {
+		t.Errorf("窓口が上司として振る舞うよう伝わっていない:\n%s", lead)
+	}
+	if strings.Contains(hand, "上司です") {
+		t.Error("下位の居ない相手を上司として扱っている")
 	}
 }
