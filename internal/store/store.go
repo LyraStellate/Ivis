@@ -157,6 +157,11 @@ const channelIndex = `CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_channel
                         ON sessions(channel_id) WHERE channel_id <> ''`
 
 // migrations は既存のデータベースへ後から加える列。順に試し、失敗は無視する。
+//
+// CREATE TABLE IF NOT EXISTS は、既にある表に列を足さない。スキーマへ列を
+// 書き足しただけでは、前の版で作られたデータベースはその列を持たないままに
+// なり、読み書きのたびに落ちる。列を足したら必ずここへも足すこと。
+// store_test.go の TestMigrationsCoverEveryColumn が、忘れたときに落ちる。
 var migrations = []string{
 	`ALTER TABLE messages ADD COLUMN thinking TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE sessions ADD COLUMN context_tokens INTEGER NOT NULL DEFAULT 0`,
@@ -169,6 +174,7 @@ var migrations = []string{
 	`ALTER TABLE messages ADD COLUMN why TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE messages ADD COLUMN did TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE messages ADD COLUMN decision TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE tickets ADD COLUMN seq INTEGER NOT NULL DEFAULT 0`,
 	channelIndex,
 }
 
