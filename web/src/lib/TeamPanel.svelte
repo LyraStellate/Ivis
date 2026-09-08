@@ -10,7 +10,62 @@
   import TicketDetail from './TicketDetail.svelte'
   import { whoColor } from './who.js'
 
-  let { sessionId, roster, tickets, models = [], colorOf, onRoster, onTickets, onLead } = $props()
+  let {
+    sessionId,
+    roster,
+    tickets,
+    models = [],
+    colorOf,
+    onRoster,
+    onTickets,
+    onLead,
+    width = 264,
+    bounds = { min: 200, max: 620, base: 264 },
+    onResize,
+    onSizing,
+  } = $props()
+
+  // 左端を掴んで幅を変える。パネルは右にあるので、左へ引くほど広くなる。
+  //
+  // 掴んでいる間は窓ごと拾う。パネルの上から外れた瞬間に止まると、速く
+  // 動かしたときに毎回そこで手が離れる。
+  function grab(e) {
+    e.preventDefault()
+    const from = e.clientX
+    const start = width
+    onSizing?.(true)
+    // 掴んでいる間に文字が選ばれると、離したあと選択が残る。
+    const held = document.body.style.userSelect
+    document.body.style.userSelect = 'none'
+
+    const move = (ev) => onResize?.(start + (from - ev.clientX))
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      document.body.style.userSelect = held
+      onSizing?.(false)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
+  // 掴めない人のための道。掴む操作しか無いものは、その手が使えなければ
+  // 変えられないままになる。
+  function nudge(e) {
+    const step = e.shiftKey ? 48 : 16
+    if (e.key === 'ArrowLeft') {
+      onResize?.(width + step)
+    } else if (e.key === 'ArrowRight') {
+      onResize?.(width - step)
+    } else if (e.key === 'Home') {
+      onResize?.(bounds.max)
+    } else if (e.key === 'End') {
+      onResize?.(bounds.min)
+    } else {
+      return
+    }
+    e.preventDefault()
+  }
 
   const members = $derived(roster?.members ?? [])
   const available = $derived(roster?.available ?? [])
@@ -119,6 +174,26 @@
 </script>
 
 <aside>
+  <!-- フォーカスできる separator は、幅を決めるつまみとして ARIA が定めて
+       いる形そのものである (window splitter)。svelte の検査はその組み合わせを
+       知らず、div でも button でも別々に咎めるので、ここだけ黙らせる。 -->
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <div
+    class="grip"
+    role="separator"
+    aria-orientation="vertical"
+    aria-label="パネルの幅"
+    aria-valuenow={width}
+    aria-valuemin={bounds.min}
+    aria-valuemax={bounds.max}
+    tabindex="0"
+    onpointerdown={grab}
+    onkeydown={nudge}
+    ondblclick={() => onResize?.(bounds.base)}
+    title="ドラッグで幅を変えられます (ダブルクリックで既定へ)"
+  ></div>
+
   <section>
     <button class="head" onclick={() => (open.common = !open.common)} aria-expanded={open.common}>
       <span class="caret" class:on={open.common}></span>共通エージェント
@@ -297,6 +372,7 @@
 
 <style>
   aside {
+    position: relative;
     display: flex;
     flex-direction: column;
     min-height: 0;
@@ -304,6 +380,41 @@
     padding: 6px 8px 12px;
     background: var(--rail);
     border-left: 1px solid var(--border);
+  }
+
+  /* 掴む場所。境界そのものは 1px しかないので、当たりだけ広く取る。
+     線を太くすると、閉じている会話との境目がそこだけ違って見える。 */
+  .grip {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -3px;
+    width: 7px;
+    padding: 0;
+    z-index: 1;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    cursor: col-resize;
+    touch-action: none;
+  }
+
+  .grip::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 3px;
+    width: 1px;
+    background: transparent;
+    transition: background var(--dur) var(--ease);
+  }
+  .grip:hover::after,
+  .grip:focus-visible::after {
+    background: var(--accent-line);
+  }
+  .grip:focus-visible {
+    outline: none;
   }
   section {
     flex: none;

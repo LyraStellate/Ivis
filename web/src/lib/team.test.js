@@ -458,3 +458,89 @@ describe('チケットのカード', () => {
     unmount(app)
   })
 })
+
+describe('右パネルの幅', () => {
+  const roster = { members: [], available: [], lead_id: '', errors: [] }
+
+  function render(over = {}) {
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+    const sized = []
+    const app = mount(TeamPanel, {
+      target,
+      props: {
+        sessionId: 's1',
+        roster,
+        tickets: [],
+        models: [],
+        colorOf: () => '',
+        onRoster: () => {},
+        onTickets: async () => {},
+        onLead: async () => roster,
+        width: 264,
+        bounds: { min: 200, max: 620, base: 264 },
+        onResize: (px) => sized.push(px),
+        onSizing: () => {},
+        ...over,
+      },
+    })
+    flushSync()
+    return { target, app, sized, grip: target.querySelector('.grip') }
+  }
+
+  function press(el, key, shift = false) {
+    el.dispatchEvent(
+      new KeyboardEvent('keydown', { key, shiftKey: shift, bubbles: true, cancelable: true }),
+    )
+    flushSync()
+  }
+
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  it('つまみは幅を表す分割線として置かれる', () => {
+    const { grip, app } = render()
+    expect(grip).not.toBe(null)
+    expect(grip.getAttribute('role')).toBe('separator')
+    expect(grip.getAttribute('aria-valuenow')).toBe('264')
+    expect(grip.getAttribute('aria-valuemin')).toBe('200')
+    expect(grip.getAttribute('aria-valuemax')).toBe('620')
+    // 掴めない人にも道が要るので、焦点を置ける。
+    expect(grip.getAttribute('tabindex')).toBe('0')
+    unmount(app)
+  })
+
+  // パネルは右にあるので、左へ動かすほど広くなる。
+  it('矢印で広げたり狭めたりできる', () => {
+    const { grip, sized, app } = render()
+    press(grip, 'ArrowLeft')
+    press(grip, 'ArrowRight')
+    press(grip, 'ArrowLeft', true)
+    expect(sized).toEqual([280, 248, 312])
+    unmount(app)
+  })
+
+  it('Home と End で端まで振れる', () => {
+    const { grip, sized, app } = render()
+    press(grip, 'Home')
+    press(grip, 'End')
+    expect(sized).toEqual([620, 200])
+    unmount(app)
+  })
+
+  it('関係のないキーは素通しする', () => {
+    const { grip, sized, app } = render()
+    press(grip, 'a')
+    expect(sized).toEqual([])
+    unmount(app)
+  })
+
+  it('ダブルクリックで既定へ戻す', () => {
+    const { grip, sized, app } = render({ width: 500 })
+    grip.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    flushSync()
+    expect(sized).toEqual([264])
+    unmount(app)
+  })
+})

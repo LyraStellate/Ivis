@@ -60,6 +60,32 @@
   let tickets = $state([])
   let models = $state([])
   let panelHidden = $state(false)
+
+  // 右パネルの幅。中身は会話ごとに違う (題の長いチケット、名前の長い担当) ので、
+  // 決め打ちの幅では足りたり余ったりする。掴んで変えられるようにし、選んだ幅は
+  // 覚えておく。開き直すたびに戻ると、変えられないのとほとんど同じになる。
+  const PANEL = { min: 200, max: 620, base: 264 }
+  let panelWidth = $state(storedWidth())
+  let sizing = $state(false)
+
+  function storedWidth() {
+    try {
+      const v = Number(localStorage.getItem('ivis.panel'))
+      if (Number.isFinite(v) && v >= PANEL.min && v <= PANEL.max) return v
+    } catch {
+      // 保存先が使えない場面 (プライベートウィンドウなど) はある。既定で開く。
+    }
+    return PANEL.base
+  }
+
+  function resizePanel(px) {
+    panelWidth = Math.min(PANEL.max, Math.max(PANEL.min, Math.round(px)))
+    try {
+      localStorage.setItem('ivis.panel', String(panelWidth))
+    } catch {
+      // 覚えられなくても、この画面を開いている間は効く。
+    }
+  }
   const isTeam = $derived(session?.kind === 'team')
   const members = $derived(roster?.members ?? [])
 
@@ -352,7 +378,13 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="app" class:narrow={railHidden} class:teamed={isTeam && !panelHidden}>
+<div
+  class="app"
+  class:narrow={railHidden}
+  class:teamed={isTeam && !panelHidden}
+  class:sizing
+  style:--panel={panelWidth + 'px'}
+>
   <Sidebar
     {sessions}
     {agents}
@@ -434,6 +466,10 @@
       onRoster={(r) => (roster = r)}
       onTickets={refreshTickets}
       onLead={setLead}
+      width={panelWidth}
+      bounds={PANEL}
+      onResize={resizePanel}
+      onSizing={(on) => (sizing = on)}
     />
   {/if}
 
@@ -494,10 +530,15 @@
   }
   /* チームの名簿とチケットは会話の右に置く。開いている間だけ幅を取る。 */
   .app.teamed {
-    grid-template-columns: 240px minmax(0, 1fr) 264px;
+    grid-template-columns: 240px minmax(0, 1fr) var(--panel);
   }
   .app.teamed.narrow {
-    grid-template-columns: 0 minmax(0, 1fr) 264px;
+    grid-template-columns: 0 minmax(0, 1fr) var(--panel);
+  }
+  /* 掴んで動かしている間は補間しない。1 回動かすたびに追いかける動きが
+     入り、指より遅れて付いてくる。 */
+  .app.sizing {
+    transition: none;
   }
   main {
     display: flex;
