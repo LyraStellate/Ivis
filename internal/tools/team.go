@@ -92,6 +92,23 @@ func IsTeamOnly(t Tool) bool {
 	return ok && s.TeamOnly()
 }
 
+// changer は、実行すると画面が持っている一覧が古くなるツール。何が古く
+// なったのかを名前で返す。
+//
+// ツール名の表をどこか別の場所に置かないのは、ツールを増やしたときにその表を
+// 直し忘れるからである。チーム専用かどうかを見分けるのと同じ考え方で、
+// 知っているもの自身に答えさせる。
+type changer interface{ Changes() string }
+
+// Changes はそのツールが古くするものの名前を返す。何も古くしなければ空。
+func Changes(t Tool) string {
+	c, ok := t.(changer)
+	if !ok {
+		return ""
+	}
+	return c.Changes()
+}
+
 type sendMessageTool struct{ teamOnly }
 
 func (t *sendMessageTool) Name() string { return "send_message" }

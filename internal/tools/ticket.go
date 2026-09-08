@@ -43,6 +43,13 @@ func assigneeOK(ec *ExecContext, id string) error {
 	return nil
 }
 
+// 起票と更新は一覧を古くする。読むだけのものは何も変えない。
+func (t *createTicketTool) Changes() string { return ChangedTickets }
+func (t *updateTicketTool) Changes() string { return ChangedTickets }
+
+// ChangedTickets はチケットの一覧が古くなったことを表す名前。
+const ChangedTickets = "tickets"
+
 type createTicketTool struct{ ticketBase }
 
 func (t *createTicketTool) Name() string { return "create_ticket" }

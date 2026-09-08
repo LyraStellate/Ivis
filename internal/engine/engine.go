@@ -91,8 +91,12 @@ const (
 	EvtNotice = "notice"
 	// EvtStage はいま何を待っているか。始まりで名前を、終わりで空を流す。
 	EvtStage = "stage"
-	EvtUsage = "usage"
-	EvtDone  = "done"
+	// EvtChanged は、画面が持っている一覧が古くなったこと。何が古くなったかを
+	// Text に入れる。中身は載せない — 載せると同じものを 2 つの経路で
+	// 組み立てることになり、食い違ったときにどちらが正か決められない (#189542)。
+	EvtChanged = "changed"
+	EvtUsage   = "usage"
+	EvtDone    = "done"
 )
 
 // Event はストリームで UI へ送る 1 件。

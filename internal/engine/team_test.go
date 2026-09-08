@@ -693,3 +693,57 @@ func TestSilentWorkerIsQuiet(t *testing.T) {
 		}
 	}
 }
+
+// チケットを触った道具は、一覧が古くなったことを流す。流さないと、手番が
+// 回っている間ずっと古い一覧が画面に出たままになる (#189542)。
+func TestTicketToolsAnnounceChange(t *testing.T) {
+	f, sess := teamFixture(t, byMember(func(self string, nth int) []provider.Event {
+		if self == "lead" && nth == 0 {
+			return []provider.Event{callTool("create_ticket",
+				map[string]any{"title": "仕事", "body": "やること"})}
+		}
+		if self == "lead" && nth == 1 {
+			return []provider.Event{callTool("list_tickets", map[string]any{})}
+		}
+		return done()
+	}))
+	if err := f.eng.Run(context.Background(), sess.ID, "やって", f.emit); err != nil {
+		t.Fatal(err)
+	}
+
+	var changed []string
+	for _, e := range f.events {
+		if e.Type == EvtChanged {
+			changed = append(changed, e.Text)
+		}
+	}
+	// 起票は 1 回。読むだけの list_tickets では流れない。
+	if len(changed) != 1 || changed[0] != "tickets" {
+		t.Errorf("流れた知らせ = %v, want [tickets]", changed)
+	}
+	// 中身は載せない。載せると同じものを 2 つの経路で組み立てることになる。
+	for _, e := range f.events {
+		if e.Type == EvtChanged && (e.Result != "" || e.Args != nil) {
+			t.Error("知らせに中身が載っている")
+		}
+	}
+}
+
+// 失敗した道具では流さない。何も変わっていない。
+func TestFailedTicketToolIsNotAnnounced(t *testing.T) {
+	f, sess := teamFixture(t, byMember(func(self string, nth int) []provider.Event {
+		if self == "lead" && nth == 0 {
+			// 番号の無い更新は断られる。
+			return []provider.Event{callTool("update_ticket", map[string]any{})}
+		}
+		return done()
+	}))
+	if err := f.eng.Run(context.Background(), sess.ID, "やって", f.emit); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range f.events {
+		if e.Type == EvtChanged {
+			t.Errorf("失敗したのに知らせが流れている: %v", e.Text)
+		}
+	}
+}

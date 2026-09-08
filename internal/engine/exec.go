@@ -47,11 +47,28 @@ func (e *Engine) runToolCalls(ctx context.Context, rc *runCtx, originID string, 
 		rc.emit(Event{Type: EvtToolResult, Depth: rc.depth, Tool: call.Name,
 			ToolCallID: callID, Result: result})
 
+		// 一覧を古くする道具だったら、そのことを伝える。伝えないと、手番が
+		// 回っている間ずっと古い一覧が出たままになる。
+		if err == nil {
+			if what := changedBy(e, call.Name); what != "" {
+				rc.emit(Event{Type: EvtChanged, Text: what})
+			}
+		}
+
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 	}
 	return nil
+}
+
+// changedBy はその道具が古くするものの名前を返す。
+func changedBy(e *Engine, name string) string {
+	t, ok := e.Tools.Get(name)
+	if !ok {
+		return ""
+	}
+	return tools.Changes(t)
 }
 
 func (e *Engine) runOneTool(ctx context.Context, rc *runCtx, callID string, call provider.ToolCall) (string, error) {
