@@ -81,6 +81,31 @@ func (s *Server) rosterOf(sess *store.Session) rosterBody {
 	return body
 }
 
+// canAnswer はその会話でそのエージェントを窓口 (直列なら答え手) にできるかを返す。
+//
+// チームでは名簿から引く。共通の一覧だけを見ると、この会話のために作った
+// 固有のエージェントを窓口にできない。窓口を移せなければ規定エージェントも
+// 外せず、名簿は general に縛られたままになる (#731906)。
+func (s *Server) canAnswer(r *http.Request, agentID string) error {
+	sess, err := s.st.GetSession(r.Context(), r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	if sess.Kind == config.KindTeam {
+		roster := team.Load(s.cfg, s.agents, sess)
+		if _, ok := roster.Get(agentID); !ok {
+			return &agent.FieldError{Field: "agent_id", Reason: fmt.Sprintf(
+				"%q はこの会話に居ません。先に名簿へ加えてください", agentID)}
+		}
+		return nil
+	}
+	if _, ok := s.agents.Get(agentID); !ok {
+		return &agent.FieldError{Field: "agent_id",
+			Reason: "エージェント " + agentID + " の定義が見つかりません"}
+	}
+	return nil
+}
+
 // handleJoin は共通エージェントの参加を切り替える。
 func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 	sess, err := s.teamSession(r)

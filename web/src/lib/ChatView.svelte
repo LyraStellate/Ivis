@@ -7,8 +7,8 @@
   import { elapsed } from './format.js'
 
   let {
-    session, agents, items, busy, moved = 0, stage = null, commands = [],
-    members = [], leadId = '',
+    session, agents: allAgents, items, busy, moved = 0, stage = null, commands = [],
+    members = [], leadId = '', isTeam = false,
     // panelHidden は null なら右のパネルそのものが無い会話 (直列)。
     panelHidden = null, onTogglePanel = null,
     notice, status, railHidden, onToggleRail,
@@ -19,8 +19,16 @@
   let scroller = $state(null)
   let pinned = $state(true)
 
+  // 入力欄で選べる相手。チームではこの会話の名簿から選ぶ — そこで選ぶのは
+  // 窓口であり、居ない相手は窓口にできない (#731906)。
+  const agents = $derived(isTeam ? members : allAgents)
+
   const agent = $derived(agents.find((a) => a.id === session?.agent_id) ?? null)
-  const missingAgent = $derived(session != null && agent == null)
+  // 名簿が届く前に「居ない」と言わない。開いた直後の一瞬だけ空になるので、
+  // そこで送信を止めると、開くたびに帯が明滅する。
+  const missingAgent = $derived(
+    session != null && agent == null && (!isTeam || members.length > 0),
+  )
   const providerDown = $derived(status != null && !status.provider_ok)
 
   // Discord の会話は画面からは進まない。送れても、その内容はチャンネルに

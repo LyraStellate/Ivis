@@ -351,3 +351,63 @@ func TestToolListMarksTeamOnly(t *testing.T) {
 		t.Error("send_message が一覧に無い")
 	}
 }
+
+// 窓口は名簿の中から選べる。共通の一覧だけを見ていると、その会話のために
+// 作った担当を窓口にできず、規定エージェントを外せないままになる (#731906)。
+func TestLeadCanMoveToLocalAgentThenGeneralLeaves(t *testing.T) {
+	s, _, _ := newServer(t)
+	id := newTeam(t, s)
+
+	code, body := call(t, s, http.MethodPost, "/api/sessions/"+id+"/agents",
+		`{"id":"boss","name":"Boss","model":"m","tier":0}`)
+	if code != http.StatusOK {
+		t.Fatalf("固有の担当を作れない: %d %v", code, body)
+	}
+
+	// 窓口を固有の担当へ移す。
+	code, body = call(t, s, http.MethodPatch, "/api/sessions/"+id, `{"agent_id":"boss"}`)
+	if code != http.StatusOK {
+		t.Fatalf("窓口を移せない: %d %v", code, body)
+	}
+	if body["agent_id"] != "boss" {
+		t.Errorf("agent_id = %v, want boss", body["agent_id"])
+	}
+
+	// 移したので general を外せる。
+	code, body = call(t, s, http.MethodPost, "/api/sessions/"+id+"/members",
+		`{"agent_id":"general","join":false}`)
+	if code != http.StatusOK {
+		t.Fatalf("general を外せない: %d %v", code, body)
+	}
+	if got := ids(body, "members"); strings.Join(got, ",") != "boss" {
+		t.Errorf("名簿 = %v, want [boss]", got)
+	}
+	if body["lead_id"] != "boss" {
+		t.Errorf("lead_id = %v", body["lead_id"])
+	}
+}
+
+// 名簿に居ない相手は窓口にできない。宛先の無い発言の行き先が消える。
+func TestLeadMustBeAMember(t *testing.T) {
+	s, _, _ := newServer(t)
+	id := newTeam(t, s)
+	code, body := call(t, s, http.MethodPatch, "/api/sessions/"+id, `{"agent_id":"nobody"}`)
+	if code != http.StatusBadRequest {
+		t.Errorf("状態 = %d, want 400 (%v)", code, body)
+	}
+}
+
+// 直列の会話は今までどおり、共通の一覧から選ぶ。
+func TestSeriesAgentStillFromCommonSet(t *testing.T) {
+	s, _, _ := newServer(t)
+	_, sess := call(t, s, http.MethodPost, "/api/sessions", `{}`)
+	id := sess["id"].(string)
+	code, _ := call(t, s, http.MethodPatch, "/api/sessions/"+id, `{"agent_id":"nobody"}`)
+	if code != http.StatusBadRequest {
+		t.Errorf("状態 = %d, want 400", code)
+	}
+	code, body := call(t, s, http.MethodPatch, "/api/sessions/"+id, `{"agent_id":"general"}`)
+	if code != http.StatusOK || body["agent_id"] != "general" {
+		t.Errorf("%d %v", code, body)
+	}
+}

@@ -10,7 +10,7 @@
   import TicketDetail from './TicketDetail.svelte'
   import { whoColor } from './who.js'
 
-  let { sessionId, roster, tickets, models = [], colorOf, onRoster, onTickets } = $props()
+  let { sessionId, roster, tickets, models = [], colorOf, onRoster, onTickets, onLead } = $props()
 
   const members = $derived(roster?.members ?? [])
   const available = $derived(roster?.available ?? [])
@@ -54,6 +54,20 @@
     if (r) onRoster(r)
   }
 
+  // 窓口を移す。移さないかぎり、いまの窓口は外せない — 宛先の無い発言の
+  // 行き先が消えるためである。移せることが、規定エージェントを外す道になる。
+  async function makeLead(id) {
+    busy = true
+    error = null
+    try {
+      onRoster(await onLead(id))
+    } catch (e) {
+      error = e.message
+    } finally {
+      busy = false
+    }
+  }
+
   async function copy(id) {
     const r = await guard(() => api.copyAgent(sessionId, id, ''))
     if (r) onRoster(r)
@@ -88,13 +102,19 @@
       <span class="n">{joined.length} / {joined.length + available.length}</span>
     </button>
     {#if open.common}
-      <p class="lede">参加させると、この会話で宛先に選べます。定義を直せば、参加している全てのチームに効きます。</p>
+      <p class="lede">
+        参加させると、この会話で宛先に選べます。定義を直せば、参加している全てのチームに効きます。
+        宛先を書かない発言は窓口へ届くので、外したい相手が窓口なら先に窓口を移してください。
+      </p>
       {#each joined as m (m.id)}
         <div class="row">
           <span class="dot" style:background={whoColor(m.id, colorOf)}></span>
           <span class="id">{m.id}</span>
           <span class="tier">T{m.tier}</span>
           {#if m.lead}<span class="lead">窓口</span>{/if}
+          {#if !m.lead}
+            <button class="quiet" disabled={busy} onclick={() => makeLead(m.id)}>窓口に</button>
+          {/if}
           <button class="quiet" disabled={busy || m.lead} onclick={() => join(m.id, false)}>
             外す
           </button>
@@ -128,6 +148,9 @@
           <span class="id">{m.id}</span>
           <span class="tier">T{m.tier}</span>
           {#if m.lead}<span class="lead">窓口</span>{/if}
+          {#if !m.lead}
+            <button class="quiet" disabled={busy} onclick={() => makeLead(m.id)}>窓口に</button>
+          {/if}
           <button class="quiet" onclick={() => (editing = { agent: m })}>編集</button>
           <button class="quiet" disabled={busy || m.lead} onclick={() => (pendingDelete = m)}>
             削除

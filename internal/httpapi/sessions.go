@@ -93,9 +93,8 @@ func (s *Server) handlePatchSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if in.AgentID != "" {
-		if _, ok := s.agents.Get(in.AgentID); !ok {
-			writeError(w, http.StatusBadRequest,
-				errors.New("エージェント "+in.AgentID+" の定義が見つかりません"))
+		if err := s.canAnswer(r, in.AgentID); err != nil {
+			writeError(w, statusFor(err), err)
 			return
 		}
 	}

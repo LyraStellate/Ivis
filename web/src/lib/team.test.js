@@ -5,6 +5,14 @@ import { Transcript } from './conversation.js'
 import { leads, speaker } from './group.js'
 import Composer from './Composer.svelte'
 import Item from './Item.svelte'
+import ChatView from './ChatView.svelte'
+
+// 末尾へ追従する仕掛けが要求する。jsdom には無い。
+globalThis.ResizeObserver = class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
 
 const msg = (o) => ({ parent_id: '', tool_calls: null, tool_name: '', error: '', ...o })
 
@@ -257,6 +265,79 @@ describe('宛先の候補', () => {
   it('宛先を書かなければ窓口へ届くと伝える', () => {
     const { target, app } = render()
     expect(target.querySelector('.hint').textContent).toContain('lead')
+    unmount(app)
+  })
+})
+
+describe('チームでの入力欄の相手', () => {
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  function render(over = {}) {
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+    const app = mount(ChatView, {
+      target,
+      props: {
+        session: { id: 's1', title: 'チーム', agent_id: 'boss', kind: 'team' },
+        agents: [{ id: 'general', name: 'General' }],
+        members: [
+          { id: 'boss', name: 'Boss', tier: 0, lead: true },
+          { id: 'hand', name: 'Hand', tier: 2, lead: false },
+        ],
+        leadId: 'boss',
+        isTeam: true,
+        items: [],
+        busy: false,
+        moved: 0,
+        stage: null,
+        commands: [],
+        notice: null,
+        status: { provider_ok: true, default_agent: 'general' },
+        railHidden: false,
+        panelHidden: false,
+        usage: null,
+        draftBack: null,
+        colorOf: () => '',
+        onToggleRail: () => {},
+        onTogglePanel: () => {},
+        onSend: () => {},
+        onCancel: () => {},
+        onApprove: () => {},
+        onAnswer: () => {},
+        onAgentChange: () => {},
+        onDismiss: () => {},
+        onRewind: () => {},
+        ...over,
+      },
+    })
+    flushSync()
+    return { target, app }
+  }
+
+  // 窓口はこの会話の名簿から選ぶ。共通の一覧を出すと、居ない相手を窓口に
+  // しようとして断られる (#731906)。
+  it('選べるのは名簿のメンバーだけ', () => {
+    const { target, app } = render()
+    const opts = [...target.querySelectorAll('.who option')].map((o) => o.value)
+    expect(opts).toEqual(['boss', 'hand'])
+    unmount(app)
+  })
+
+  // 窓口が固有のエージェントでも、共通の一覧に無いことを理由に送信を
+  // 止めない。
+  it('固有の担当が窓口でも送信を止めない', () => {
+    const { target, app } = render()
+    expect(target.querySelector('.banner')).toBe(null)
+    expect(target.querySelector('textarea').disabled).toBe(false)
+    unmount(app)
+  })
+
+  // 名簿が届く前に「居ない」と言わない。開くたびに帯が明滅する。
+  it('名簿が届く前は騒がない', () => {
+    const { target, app } = render({ members: [] })
+    expect(target.querySelector('.banner')).toBe(null)
     unmount(app)
   })
 })
