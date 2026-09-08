@@ -33,8 +33,12 @@ type live struct {
 	mu      sync.Mutex
 	buf     []engine.Event
 	trimmed bool
-	subs    map[chan engine.Event]struct{}
-	done    bool
+	// lost は、読み手が詰まっていて配れなかった経過があること。取りこぼした
+	// ぶんは実行の終わりに履歴を読み直せば埋まるが、埋まるまでのあいだ画面が
+	// 古い形のままになるので、印だけ残す。
+	lost bool
+	subs map[chan engine.Event]struct{}
+	done bool
 }
 
 func newLive() *live {
@@ -43,23 +47,23 @@ func newLive() *live {
 
 // emit は経過を 1 件、覚えたうえで見ている者へ配る。
 func (l *live) emit(ev engine.Event) {
+	// 送るところまで錠の中で行う。錠を離してから送ると、その隙に close が
+	// 通路を閉じ、閉じた通路へ送って落ちる。詰まらせない送り方なので、
+	// 錠を持ったままでも待たされない。
 	l.mu.Lock()
+	defer l.mu.Unlock()
+
 	l.buf = append(l.buf, ev)
 	if len(l.buf) > maxBuffered {
 		l.trim()
 	}
-	subs := make([]chan engine.Event, 0, len(l.subs))
 	for ch := range l.subs {
-		subs = append(subs, ch)
-	}
-	l.mu.Unlock()
-
-	for _, ch := range subs {
 		// 読み手が詰まっていても実行は止めない。取りこぼした分は、実行が
 		// 終わったところで履歴を読み直せば埋まる。
 		select {
 		case ch <- ev:
 		default:
+			l.lost = true
 		}
 	}
 }
@@ -84,17 +88,12 @@ func (l *live) trim() {
 // close は実行が終わったことを伝える。
 func (l *live) close() {
 	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.done = true
-	subs := make([]chan engine.Event, 0, len(l.subs))
 	for ch := range l.subs {
-		subs = append(subs, ch)
-	}
-	l.subs = map[chan engine.Event]struct{}{}
-	l.mu.Unlock()
-
-	for _, ch := range subs {
 		close(ch)
 	}
+	l.subs = map[chan engine.Event]struct{}{}
 }
 
 // join は、それまでの経過と、以後の経過が流れてくる口を返す。
