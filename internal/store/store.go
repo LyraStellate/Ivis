@@ -389,7 +389,8 @@ func (s *Store) DeleteSession(ctx context.Context, id string) error {
 	}
 	// チケットも会話に属する。仕事の記録はその会話のものであり、読み手の
 	// 居なくなった票を残しても、どの会話のものか辿れない (#189542)。
-	return s.deleteTickets(ctx, id)
+	_, err = s.deleteTickets(ctx, id, 0)
+	return err
 }
 
 // AppendMessage は発言を追加する。ID と連番と時刻はここで割り当てる。
@@ -589,26 +590,43 @@ func (s *Store) SetContextUsage(ctx context.Context, sessionID string, tokens, l
 	return err
 }
 
-// ClearMessages はその会話の発言をすべて消す。会話そのものは残す。
+// Removed は消した件数。発言とチケットを分けて数えるのは、どちらも取り消せ
+// ないためである。何がどれだけ消えたのかが数だけでも残らないと、打ち間違いに
+// 気づく手がかりが無い。
+type Removed struct {
+	Messages int `json:"messages"`
+	Tickets  int `json:"tickets"`
+}
+
+// ClearMessages はその会話の発言とチケットをすべて消す。会話そのものは残す。
 //
 // 会話ごと消さないのは、Discord のチャンネルに結び付いているためである。
 // 消して作り直すと結び付きが張り直され、そのときに作業ディレクトリも別の
 // 場所になる。話の続きを捨てたいだけの人が、置いたファイルまで失う。
-func (s *Store) ClearMessages(ctx context.Context, sessionID string) (int, error) {
+//
+// チケットも一緒に消すのは、それがその会話の仕事の記録だからである。発言を
+// 消してチケットだけ残すと、何の話か分からない仕事の一覧が残る (#189542)。
+func (s *Store) ClearMessages(ctx context.Context, sessionID string) (Removed, error) {
+	var out Removed
 	res, err := s.db.ExecContext(ctx, `DELETE FROM messages WHERE session_id = ?`, sessionID)
 	if err != nil {
-		return 0, err
+		return out, err
 	}
 	n, _ := res.RowsAffected()
+	out.Messages = int(n)
+
+	if out.Tickets, err = s.deleteTickets(ctx, sessionID, 0); err != nil {
+		return out, err
+	}
 
 	// 実測値が無くなったので使用量は不明に戻す。前のターンの値を残すと、
 	// 消したはずの分を数えたままの割合が出る。
 	if _, err := s.db.ExecContext(ctx,
 		`UPDATE sessions SET context_tokens = 0, context_limit = 0, updated_at = ? WHERE id = ?`,
 		time.Now().UnixMilli(), sessionID); err != nil {
-		return 0, err
+		return out, err
 	}
-	return int(n), nil
+	return out, nil
 }
 
 // Rewind は指定した利用者の発言と、それ以降の全ての発言を消す。
@@ -617,35 +635,45 @@ func (s *Store) ClearMessages(ctx context.Context, sessionID string) (int, error
 // 起点を利用者の発言に限るのは、やり直しの単位が「あの依頼から」だからで
 // ある。モデルの発言の途中を起点にできても、消したあとに何を送ればよいかが
 // 決まらない。委譲された子の発言も、親より後の連番を持つのでまとめて消える。
-func (s *Store) Rewind(ctx context.Context, sessionID, messageID string) (int, string, error) {
+func (s *Store) Rewind(ctx context.Context, sessionID, messageID string) (Removed, string, error) {
+	var out Removed
 	var seq int64
 	var role, content, parentID string
 	err := s.db.QueryRowContext(ctx,
 		`SELECT seq, role, content, parent_id FROM messages WHERE id = ? AND session_id = ?`,
 		messageID, sessionID).Scan(&seq, &role, &content, &parentID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, "", ErrNotFound
+		return out, "", ErrNotFound
 	}
 	if err != nil {
-		return 0, "", err
+		return out, "", err
 	}
 	if role != provider.RoleUser || parentID != "" {
-		return 0, "", ErrNotRewindable
+		return out, "", ErrNotRewindable
 	}
 
 	res, err := s.db.ExecContext(ctx,
 		`DELETE FROM messages WHERE session_id = ? AND seq >= ?`, sessionID, seq)
 	if err != nil {
-		return 0, "", err
+		return out, "", err
 	}
 	n, _ := res.RowsAffected()
+	out.Messages = int(n)
+
+	// その地点より後に起票されたチケットも消す。消さないと、もう存在しない
+	// やり取りから生まれた仕事だけが残り、誰の依頼だったのかを辿れなくなる。
+	// それより前からあるチケットには触れない — 中身を途中まで戻すと、状態と
+	// その理由が食い違った記録になる (#189542)。
+	if out.Tickets, err = s.deleteTickets(ctx, sessionID, seq); err != nil {
+		return out, "", err
+	}
 
 	// 実測値が無くなったので使用量は不明に戻す。前のターンの値を残すと、
 	// 消したはずの分を数えたままの割合が出る。
 	if _, err := s.db.ExecContext(ctx,
 		`UPDATE sessions SET context_tokens = 0, context_limit = 0, updated_at = ? WHERE id = ?`,
 		time.Now().UnixMilli(), sessionID); err != nil {
-		return 0, "", err
+		return out, "", err
 	}
-	return int(n), content, nil
+	return out, content, nil
 }

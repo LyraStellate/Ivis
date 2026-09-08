@@ -108,16 +108,20 @@ func List() []Command {
 				if d.Runs.Running(sess.ID) {
 					return "生成中は消せません。先に /stop で止めてください。"
 				}
-				n, err := d.Store.ClearMessages(ctx, sess.ID)
+				got, err := d.Store.ClearMessages(ctx, sess.ID)
 				if err != nil {
 					return "消せませんでした: " + err.Error()
 				}
-				if n == 0 {
-					return "消す履歴はありませんでした。"
+				if got.Messages == 0 && got.Tickets == 0 {
+					return "消すものはありませんでした。"
 				}
 				// 件数を返すのは、取り消せない操作だからである。何が消えたのかが
 				// 数だけでも残らないと、打ち間違いに気づく手がかりが無い。
-				return fmt.Sprintf("履歴を消しました (%d 件)。作業ディレクトリのファイルはそのままです。", n)
+				msg := fmt.Sprintf("履歴を消しました (%d 件)", got.Messages)
+				if got.Tickets > 0 {
+					msg += fmt.Sprintf("。チケットも消しました (%d 件)", got.Tickets)
+				}
+				return msg + "。作業ディレクトリのファイルはそのままです。"
 			},
 		},
 		{

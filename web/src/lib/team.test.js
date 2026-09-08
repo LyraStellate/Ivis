@@ -6,6 +6,7 @@ import { leads, speaker } from './group.js'
 import Composer from './Composer.svelte'
 import Item from './Item.svelte'
 import ChatView from './ChatView.svelte'
+import TeamPanel from './TeamPanel.svelte'
 
 // 末尾へ追従する仕掛けが要求する。jsdom には無い。
 globalThis.ResizeObserver = class {
@@ -338,6 +339,122 @@ describe('チームでの入力欄の相手', () => {
   it('名簿が届く前は騒がない', () => {
     const { target, app } = render({ members: [] })
     expect(target.querySelector('.banner')).toBe(null)
+    unmount(app)
+  })
+})
+
+describe('チケットのカード', () => {
+  const roster = {
+    members: [{ id: 'boss', name: 'Boss', tier: 0, lead: true, local: false }],
+    available: [],
+    lead_id: 'boss',
+    errors: [],
+  }
+
+  const tk = (o) => ({
+    number: 1,
+    title: '設計の確認',
+    body: '',
+    assignee: '',
+    due: '',
+    status: '新規',
+    priority: '中',
+    author: '',
+    note_count: 0,
+    created_at: '2026-09-08T09:00:00Z',
+    updated_at: '2026-09-08T09:00:00Z',
+    ...o,
+  })
+
+  function render(tickets) {
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+    const app = mount(TeamPanel, {
+      target,
+      props: {
+        sessionId: 's1',
+        roster,
+        tickets,
+        models: [],
+        colorOf: () => '',
+        onRoster: () => {},
+        onTickets: async () => {},
+        onLead: async () => roster,
+      },
+    })
+    flushSync()
+    return { target, app }
+  }
+
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  // 1 行に詰め込むと題が切れて、何の仕事か分からない。題を主に置く。
+  it('番号・状態・題・担当・期限・注記の数を出す', () => {
+    const { target, app } = render([
+      tk({ assignee: 'hand', due: '2026-09-30', note_count: 3, status: '進行中' }),
+    ])
+    const card = target.querySelector('.card')
+    expect(card).not.toBe(null)
+    expect(card.querySelector('.ttitle').textContent).toBe('設計の確認')
+    expect(card.textContent).toContain('#1')
+    expect(card.textContent).toContain('進行中')
+    expect(card.textContent).toContain('hand')
+    expect(card.textContent).toContain('2026-09-30')
+    expect(card.textContent).toContain('注記 3')
+    unmount(app)
+  })
+
+  it('担当が無ければそう書く', () => {
+    const { target, app } = render([tk()])
+    expect(target.querySelector('.who').textContent.trim()).toBe('未割り当て')
+    unmount(app)
+  })
+
+  // 目立たせるのは緊急と高だけ。全部に印を付けると、どれも目立たない。
+  it('優先度は緊急と高だけ出す', () => {
+    const { target: a, app: A } = render([tk({ priority: '中' })])
+    expect(a.querySelector('.pri')).toBe(null)
+    unmount(A)
+
+    const { target: b, app: B } = render([tk({ priority: '緊急' })])
+    expect(b.querySelector('.pri').classList.contains('urgent')).toBe(true)
+    unmount(B)
+  })
+
+  // 並びは優先度の高い順、同じなら期限の近い順。番号順だと、いま効いている
+  // 仕事が古い番号の下に沈む。
+  it('優先度と期限で並べ替える', () => {
+    const { target, app } = render([
+      tk({ number: 1, title: '低い', priority: '低' }),
+      tk({ number: 2, title: '遅い期限', priority: '高', due: '2026-12-01' }),
+      tk({ number: 3, title: '急ぎ', priority: '緊急' }),
+      tk({ number: 4, title: '近い期限', priority: '高', due: '2026-09-10' }),
+    ])
+    const titles = [...target.querySelectorAll('.ttitle')].map((e) => e.textContent)
+    expect(titles).toEqual(['急ぎ', '近い期限', '遅い期限', '低い'])
+    unmount(app)
+  })
+
+  it('終了は既定で出さない', () => {
+    const { target, app } = render([tk({ status: '終了' })])
+    expect(target.querySelector('.card')).toBe(null)
+    target.querySelector('.closed input[type="checkbox"]').click()
+    flushSync()
+    expect(target.querySelector('.card.closed')).not.toBe(null)
+    unmount(app)
+  })
+
+  // 消すのは取り消せない操作なので、確認を挟む。
+  it('消す前に確認する', () => {
+    const { target, app } = render([tk()])
+    target.querySelector('.kill').click()
+    flushSync()
+    const box = document.querySelector('[role="alertdialog"]')
+    expect(box).not.toBe(null)
+    expect(box.textContent).toContain('#1 設計の確認')
+    expect(box.textContent).toContain('注記も一緒に消えます')
     unmount(app)
   })
 })

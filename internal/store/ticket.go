@@ -78,9 +78,16 @@ type Ticket struct {
 	Status   string `json:"status"`
 	Priority string `json:"priority"`
 	// Author は起票した者。メンバーの ID、または利用者なら空。
-	Author    string        `json:"author"`
-	CreatedAt time.Time     `json:"created_at"`
-	UpdatedAt time.Time     `json:"updated_at"`
+	Author string `json:"author"`
+	// Seq は起票した時点での会話の並びの位置。発言と同じ軸に置くことで、
+	// 巻き戻しがどのチケットを消すべきかを決められる。番号 (Number) は
+	// 人が指すためのもので、順序の判断には使わない (#189542)。
+	Seq       int64     `json:"-"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	// NoteCount は注記の数。一覧では中身を返さないので、経過が積まれている
+	// かどうかだけでも分かるようにする。1 件を読むときは Notes が埋まる。
+	NoteCount int           `json:"note_count"`
 	Notes     []*TicketNote `json:"notes,omitempty"`
 }
 
@@ -110,6 +117,7 @@ CREATE TABLE IF NOT EXISTS tickets (
   status     TEXT NOT NULL,
   priority   TEXT NOT NULL,
   author     TEXT NOT NULL DEFAULT '',
+  seq        INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (session_id, number)
@@ -129,7 +137,7 @@ CREATE INDEX IF NOT EXISTS idx_ticket_notes ON ticket_notes(session_id, number, 
 `
 
 const ticketColumns = `session_id, number, title, body, assignee, due, status, priority,
-                       author, created_at, updated_at`
+                       author, seq, created_at, updated_at`
 
 // CreateTicket は起票する。連番はここで振る。
 //
@@ -167,11 +175,19 @@ func (s *Store) CreateTicket(ctx context.Context, t *Ticket) error {
 	}
 	t.Number = int(max.Int64) + 1
 
+	// いまの会話の末尾に置く。巻き戻しはここを見て、消す範囲を決める。
+	var seq sql.NullInt64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT MAX(seq) FROM messages WHERE session_id = ?`, t.SessionID).Scan(&seq); err != nil {
+		return err
+	}
+	t.Seq = seq.Int64
+
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO tickets (`+ticketColumns+`)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.SessionID, t.Number, t.Title, t.Body, t.Assignee, t.Due, t.Status, t.Priority,
-		t.Author, now.UnixMilli(), now.UnixMilli()); err != nil {
+		t.Author, t.Seq, now.UnixMilli(), now.UnixMilli()); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -185,7 +201,7 @@ func (s *Store) GetTicket(ctx context.Context, sessionID string, number int) (*T
 		`SELECT `+ticketColumns+` FROM tickets WHERE session_id = ? AND number = ?`,
 		sessionID, number).
 		Scan(&t.SessionID, &t.Number, &t.Title, &t.Body, &t.Assignee, &t.Due, &t.Status,
-			&t.Priority, &t.Author, &created, &updated)
+			&t.Priority, &t.Author, &t.Seq, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -200,6 +216,7 @@ func (s *Store) GetTicket(ctx context.Context, sessionID string, number int) (*T
 		return nil, err
 	}
 	t.Notes = notes
+	t.NoteCount = len(notes)
 	return &t, nil
 }
 
@@ -217,7 +234,10 @@ type TicketFilter struct {
 // 一覧で本文と注記まで返すと、それだけでコンテキストが埋まる。中身が要るなら
 // 番号を指定して 1 件を読む。
 func (s *Store) ListTickets(ctx context.Context, sessionID string, f TicketFilter) ([]*Ticket, error) {
-	q := `SELECT ` + ticketColumns + ` FROM tickets WHERE session_id = ?`
+	q := `SELECT ` + ticketColumns + `,
+	             (SELECT COUNT(*) FROM ticket_notes n
+	               WHERE n.session_id = tickets.session_id AND n.number = tickets.number)
+	        FROM tickets WHERE session_id = ?`
 	args := []any{sessionID}
 	if f.Assignee != "" {
 		q += ` AND assignee = ?`
@@ -243,7 +263,8 @@ func (s *Store) ListTickets(ctx context.Context, sessionID string, f TicketFilte
 		var t Ticket
 		var created, updated int64
 		if err := rows.Scan(&t.SessionID, &t.Number, &t.Title, &t.Body, &t.Assignee, &t.Due,
-			&t.Status, &t.Priority, &t.Author, &created, &updated); err != nil {
+			&t.Status, &t.Priority, &t.Author, &t.Seq, &created, &updated,
+			&t.NoteCount); err != nil {
 			return nil, err
 		}
 		t.CreatedAt = time.UnixMilli(created)
@@ -394,12 +415,43 @@ func (s *Store) DeleteTicket(ctx context.Context, sessionID string, number int) 
 	return err
 }
 
-// deleteTickets は会話に属するチケットを消す。会話を消すときに呼ぶ。
-func (s *Store) deleteTickets(ctx context.Context, sessionID string) error {
-	if _, err := s.db.ExecContext(ctx,
-		`DELETE FROM ticket_notes WHERE session_id = ?`, sessionID); err != nil {
-		return err
+// deleteTickets は会話に属するチケットを消す。seq を指定すると、その位置
+// 以降に起票された分だけを消す。会話を消すとき、履歴を消すとき、巻き戻す
+// ときに呼ぶ。
+//
+// 生き残ったチケットの中身には触れない。状態も注記もそのまま残す。1 件の
+// チケットは仕事の記録であって発言ではないので、途中まで巻き戻すと、状態と
+// その理由が食い違った記録が残る。消すか、丸ごと残すかのどちらかにする
+// (#189542)。
+func (s *Store) deleteTickets(ctx context.Context, sessionID string, from int64) (int, error) {
+	var nums []int
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT number FROM tickets WHERE session_id = ? AND seq >= ?`, sessionID, from)
+	if err != nil {
+		return 0, err
 	}
-	_, err := s.db.ExecContext(ctx, `DELETE FROM tickets WHERE session_id = ?`, sessionID)
-	return err
+	for rows.Next() {
+		var n int
+		if err := rows.Scan(&n); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		nums = append(nums, n)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	for _, n := range nums {
+		if _, err := s.db.ExecContext(ctx,
+			`DELETE FROM ticket_notes WHERE session_id = ? AND number = ?`, sessionID, n); err != nil {
+			return 0, err
+		}
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM tickets WHERE session_id = ? AND seq >= ?`, sessionID, from); err != nil {
+		return 0, err
+	}
+	return len(nums), nil
 }

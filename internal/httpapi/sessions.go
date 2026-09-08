@@ -141,7 +141,9 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 // rewindBody は巻き戻しの結果。件数と本文を返すのは、画面が「何件消えたか」
 // を確認に出し、消した依頼をそのまま入力欄へ戻すためである。
 type rewindBody struct {
-	Deleted int         `json:"deleted"`
+	Deleted int `json:"deleted"`
+	// Tickets はその地点より後に起票され、一緒に消えたチケットの数。
+	Tickets int         `json:"tickets"`
 	Text    string      `json:"text"`
 	Session sessionBody `json:"session"`
 }
@@ -165,7 +167,7 @@ func (s *Server) handleRewind(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	n, text, err := s.st.Rewind(r.Context(), id, in.MessageID)
+	got, text, err := s.st.Rewind(r.Context(), id, in.MessageID)
 	if err != nil {
 		writeError(w, statusFor(err), err)
 		return
@@ -175,5 +177,6 @@ func (s *Server) handleRewind(w http.ResponseWriter, r *http.Request) {
 		writeError(w, statusFor(err), err)
 		return
 	}
-	writeJSON(w, http.StatusOK, rewindBody{Deleted: n, Text: text, Session: s.body(sess)})
+	writeJSON(w, http.StatusOK, rewindBody{Deleted: got.Messages, Tickets: got.Tickets,
+		Text: text, Session: s.body(sess)})
 }

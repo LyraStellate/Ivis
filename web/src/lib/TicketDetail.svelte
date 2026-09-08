@@ -9,7 +9,8 @@
   import { trapFocus } from './focus.js'
   import { clock } from './format.js'
 
-  let { sessionId, ticket, members = [], statuses, priorities, onChanged, onClose } = $props()
+  let { sessionId, ticket, members = [], statuses, priorities, onChanged, onDelete, onClose } =
+    $props()
 
   let note = $state('')
   let saving = $state(false)
@@ -155,9 +156,14 @@
     </section>
 
     {#if error}<p class="err">{error}</p>{/if}
-    <p class="foot mono">
-      起票 {ticket.author || '利用者'} · {clock(ticket.created_at)}
-    </p>
+    <div class="bottom">
+      <p class="foot mono">
+        起票 {ticket.author || '利用者'} · {clock(ticket.created_at)}
+      </p>
+      <!-- 消せるのは人だけ。モデルに消させないのは、消えたことが誰にも
+           見えないからである。 -->
+      <button class="quiet kill" onclick={onDelete}>このチケットを消す</button>
+    </div>
   </div>
 </div>
 
@@ -244,5 +250,15 @@
   .add input { flex: 1; }
 
   .err { margin: 10px 0 0; color: var(--danger-text); font-size: 12px; }
-  .foot { margin: 12px 0 0; color: var(--g9); font-size: 10px; }
+  .bottom {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--line);
+  }
+  .foot { margin: 0; color: var(--g9); font-size: 10px; }
+  .kill { margin-left: auto; font-size: 11px; color: var(--fg-dim); }
+  .kill:hover { color: var(--danger-text); background: var(--danger-surface); }
 </style>

@@ -184,6 +184,12 @@
     usage = usageOf(session)
     const history = await guard(() => api.listMessages(currentId))
     tx.loadHistory(history ?? [])
+    await refreshTickets()
+    // 消えたチケットは会話の外にあるので、履歴を見ても分からない。数だけでも
+    // 出しておかないと、気づかないまま仕事の一覧が減る。
+    if (res.tickets > 0) {
+      notice = { text: `この地点より後に起票されたチケット ${res.tickets} 件も消しました。` }
+    }
     draftBack = { text: res.text }
   }
 
@@ -449,7 +455,9 @@
     <Confirm
       title="ここからやり直しますか"
       body={pendingRewind.item.text}
-      note={`この依頼から後の ${pendingRewind.count} 件が履歴ごと消えます。作ったファイルは戻りません。`}
+      note={`この依頼から後の ${pendingRewind.count} 件が履歴ごと消えます。` +
+        (isTeam ? 'この地点より後に起票されたチケットも消えます。それより前のチケットは中身ごと残ります。' : '') +
+        '作ったファイルは戻りません。'}
       confirmLabel="やり直す"
       onConfirm={rewind}
       onCancel={() => (pendingRewind = null)}

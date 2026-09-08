@@ -27,9 +27,21 @@
   let busy = $state(false)
   let error = $state(null)
 
-  const shown = $derived(
-    showClosed ? tickets : (tickets ?? []).filter((t) => t.status !== '終了'),
-  )
+  // 並びは優先度の高い順、同じなら期限の近い順。期限を持たないものは後ろへ。
+  // 番号順に並べると、いま効いている仕事が古い番号の下に沈む。
+  const shown = $derived.by(() => {
+    const list = (tickets ?? []).filter((t) => showClosed || t.status !== '終了')
+    return [...list].sort((a, b) => {
+      const p = PRIORITIES.indexOf(b.priority) - PRIORITIES.indexOf(a.priority)
+      if (p !== 0) return p
+      if (a.due !== b.due) {
+        if (!a.due) return 1
+        if (!b.due) return -1
+        return a.due < b.due ? -1 : 1
+      }
+      return a.number - b.number
+    })
+  })
 
   // 状態と優先度の並びはサーバーが決める。画面に書き写すと、増やしたときに
   // 片方だけ古くなる。いまは固定なので、値そのものを並びとして持つ。
@@ -93,6 +105,17 @@
     detail = updated
     await onTickets()
   }
+
+  // 消せるのは人だけ。モデルに消させないのは、消えたことが誰にも見えない
+  // からで、注記はその消えた票に付いていた (#189542)。
+  async function removeTicket(n) {
+    pendingTicket = null
+    detail = null
+    await guard(() => api.deleteTicket(sessionId, n))
+    await onTickets()
+  }
+
+  let pendingTicket = $state(null)
 </script>
 
 <aside>
@@ -179,15 +202,38 @@
         </label>
       </div>
       {#each shown as t (t.number)}
-        <button class="tick" onclick={() => (detail = t)}>
-          <span class="tnum mono">#{t.number}</span>
-          <span class="ttitle">{t.title}</span>
-          <span class="st s{STATUSES.indexOf(t.status)}">{t.status}</span>
-          {#if t.priority === '緊急' || t.priority === '高'}
-            <span class="pri" class:urgent={t.priority === '緊急'}>{t.priority}</span>
-          {/if}
-          <span class="who">{t.assignee || '—'}</span>
-        </button>
+        <!-- 1 行に詰め込むと、題が切れて何の仕事か分からない。題を主に置き、
+             状態と担当はその周りへ回す。 -->
+        <div class="card" class:closed={t.status === '終了'}>
+          <button class="open" onclick={() => (detail = t)}>
+            <div class="top">
+              <span class="tnum mono">#{t.number}</span>
+              <span class="st s{STATUSES.indexOf(t.status)}">{t.status}</span>
+              {#if t.priority === '緊急' || t.priority === '高'}
+                <span class="pri" class:urgent={t.priority === '緊急'}>{t.priority}</span>
+              {/if}
+            </div>
+            <p class="ttitle">{t.title}</p>
+            <div class="foot">
+              <span class="who" class:none={!t.assignee}>
+                {t.assignee || '未割り当て'}
+              </span>
+              {#if t.due}<span class="due mono">{t.due}</span>{/if}
+              {#if t.note_count}<span class="notes">注記 {t.note_count}</span>{/if}
+            </div>
+          </button>
+          <button
+            class="kill quiet"
+            title="このチケットを消す"
+            aria-label="このチケットを消す"
+            onclick={() => (pendingTicket = t)}
+          >
+            <svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true">
+              <path d="M3 3 L9 9 M9 3 L3 9" fill="none" stroke="currentColor" stroke-width="1.6"
+                stroke-linecap="round" />
+            </svg>
+          </button>
+        </div>
       {:else}
         <p class="empty">まだありません。</p>
       {/each}
@@ -225,6 +271,17 @@
   />
 {/if}
 
+{#if pendingTicket}
+  <Confirm
+    title="このチケットを消しますか"
+    body={"#" + pendingTicket.number + " " + pendingTicket.title}
+    note="注記も一緒に消えます。元に戻せません。"
+    confirmLabel="消す"
+    onConfirm={() => removeTicket(pendingTicket.number)}
+    onCancel={() => (pendingTicket = null)}
+  />
+{/if}
+
 {#if detail}
   <TicketDetail
     {sessionId}
@@ -233,6 +290,7 @@
     statuses={STATUSES}
     priorities={PRIORITIES}
     onChanged={refreshDetail}
+    onDelete={() => (pendingTicket = detail)}
     onClose={() => (detail = null)}
   />
 {/if}
@@ -344,27 +402,76 @@
     font-size: 10px;
   }
 
-  .tick {
-    display: flex;
-    align-items: center;
-    gap: 5px;
+  /* 1 枚のカード。題を読ませたいので、状態と担当はその上下へ回す。 */
+  .card {
+    position: relative;
+    margin-bottom: 5px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--raised);
+  }
+  .card:hover { border-color: var(--border-hover); }
+  /* 終了したものは沈める。並んでいても、目が拾う先ではない。 */
+  .card.closed { opacity: 0.55; }
+
+  .card .open {
+    display: block;
     width: 100%;
-    padding: 3px 4px;
+    padding: 6px 7px;
     background: transparent;
     border-color: transparent;
     text-align: left;
-    font-size: 12px;
   }
-  .tick:hover { background: var(--g4); border-color: transparent; }
+  .card .open:hover { background: transparent; border-color: transparent; }
+
+  .top {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-bottom: 3px;
+  }
   .tnum { flex: none; color: var(--g9); font-size: 10px; }
+  /* 題は 2 行まで見せる。1 行で切ると、似た書き出しの仕事が見分けられない。 */
   .ttitle {
-    flex: 1;
-    min-width: 0;
+    margin: 0;
+    color: var(--fg-bright);
+    font-size: 12px;
+    line-height: 1.5;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--fg);
+    overflow-wrap: anywhere;
   }
+  .foot {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-top: 4px;
+    font-size: 10px;
+    color: var(--g9);
+  }
+  .foot .who { color: var(--fg-dim); }
+  .foot .who.none { color: var(--g9); font-style: italic; }
+  .foot .due { margin-left: auto; }
+  .foot .notes { flex: none; }
+
+  /* 消す手。取り消せないので、hover で出す位置に置く。 */
+  .kill {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    display: grid;
+    place-items: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    color: var(--fg-dim);
+    opacity: 0;
+  }
+  .card:hover .kill,
+  .kill:focus-visible { opacity: 1; }
+  .kill:hover { color: var(--danger-text); background: var(--danger-surface); }
   /* 状態は色で見分ける。文字だけだと、一覧を目で流したときに拾えない。 */
   .st {
     flex: none;
@@ -380,12 +487,11 @@
   .st.s4 { color: var(--g9); }
   .pri {
     flex: none;
+    margin-left: auto;
     color: var(--fg-muted);
     font-size: 9px;
   }
-  .pri.urgent { color: var(--danger-text); }
-  .who { flex: none; color: var(--g9); font-size: 10px; max-width: 5rem;
-         overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pri.urgent { color: var(--danger-text); font-weight: 600; }
 
   .err {
     margin: 6px 4px 0;

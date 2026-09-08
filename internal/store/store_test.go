@@ -50,12 +50,12 @@ func TestRewind(t *testing.T) {
 	add(t, st, sess.ID, marker, provider.RoleAssistant, "調べました 2", "child")
 	add(t, st, sess.ID, "", provider.RoleAssistant, "できました 2", "main")
 
-	n, text, err := st.Rewind(ctx, sess.ID, from)
+	got, text, err := st.Rewind(ctx, sess.ID, from)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 4 {
-		t.Errorf("消した件数 = %d, want 4", n)
+	if got.Messages != 4 {
+		t.Errorf("消した件数 = %d, want 4", got.Messages)
 	}
 	if text != "2 回目" {
 		t.Errorf("戻す本文 = %q, want %q", text, "2 回目")

@@ -172,3 +172,115 @@ func TestDeleteSessionRemovesTickets(t *testing.T) {
 		t.Errorf("注記が残っている: %d 件", len(notes))
 	}
 }
+
+// /clear は履歴と一緒にチケットも消す。発言を消してチケットだけ残すと、
+// 何の話か分からない仕事の一覧が残る (#189542)。
+func TestClearMessagesRemovesTickets(t *testing.T) {
+	st := openTeamStore(t)
+	ctx := context.Background()
+	sess, _ := st.CreateTeamSession(ctx, "boss", "")
+
+	put(t, st, &Message{SessionID: sess.ID, Role: "user", Content: "やって", ToAgentID: "boss"})
+	tk := &Ticket{SessionID: sess.ID, Title: "仕事"}
+	if err := st.CreateTicket(ctx, tk); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddNote(ctx, sess.ID, tk.Number, "boss", "覚え書き", false); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := st.ClearMessages(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Messages != 1 || got.Tickets != 1 {
+		t.Errorf("消した件数 = %+v, want {1 1}", got)
+	}
+	if list, _ := st.ListTickets(ctx, sess.ID, TicketFilter{IncludeClosed: true}); len(list) != 0 {
+		t.Errorf("チケットが残っている: %d 件", len(list))
+	}
+	if notes, _ := st.TicketNotes(ctx, sess.ID, tk.Number); len(notes) != 0 {
+		t.Errorf("注記が残っている: %d 件", len(notes))
+	}
+	// 消したあとに起票すると、番号は 1 から振り直される。
+	next := &Ticket{SessionID: sess.ID, Title: "次"}
+	if err := st.CreateTicket(ctx, next); err != nil {
+		t.Fatal(err)
+	}
+	if next.Number != 1 {
+		t.Errorf("番号 = %d, want 1", next.Number)
+	}
+}
+
+// 巻き戻すと、その地点より後に起票されたチケットが消える。前からあるものは
+// 中身ごと残す — 途中まで戻すと、状態とその理由が食い違った記録になる。
+func TestRewindRemovesLaterTickets(t *testing.T) {
+	st := openTeamStore(t)
+	ctx := context.Background()
+	sess, _ := st.CreateTeamSession(ctx, "boss", "")
+
+	put(t, st, &Message{SessionID: sess.ID, Role: "user", Content: "1 回目", ToAgentID: "boss"})
+	early := &Ticket{SessionID: sess.ID, Title: "前からある仕事"}
+	if err := st.CreateTicket(ctx, early); err != nil {
+		t.Fatal(err)
+	}
+	from := put(t, st, &Message{SessionID: sess.ID, Role: "user", Content: "2 回目", ToAgentID: "boss"})
+	late := &Ticket{SessionID: sess.ID, Title: "あとから出た仕事"}
+	if err := st.CreateTicket(ctx, late); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddNote(ctx, sess.ID, late.Number, "boss", "経過", false); err != nil {
+		t.Fatal(err)
+	}
+
+	got, text, err := st.Rewind(ctx, sess.ID, from.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != "2 回目" {
+		t.Errorf("戻す本文 = %q", text)
+	}
+	if got.Tickets != 1 {
+		t.Errorf("消したチケット = %d, want 1", got.Tickets)
+	}
+
+	list, _ := st.ListTickets(ctx, sess.ID, TicketFilter{IncludeClosed: true})
+	if len(list) != 1 || list[0].Title != "前からある仕事" {
+		t.Fatalf("残ったチケット = %v", list)
+	}
+	if notes, _ := st.TicketNotes(ctx, sess.ID, late.Number); len(notes) != 0 {
+		t.Errorf("消したチケットの注記が残っている: %d 件", len(notes))
+	}
+}
+
+// 巻き戻しの地点より前からあるチケットは、状態も注記もそのまま残る。
+func TestRewindKeepsEarlierTicketIntact(t *testing.T) {
+	st := openTeamStore(t)
+	ctx := context.Background()
+	sess, _ := st.CreateTeamSession(ctx, "boss", "")
+
+	put(t, st, &Message{SessionID: sess.ID, Role: "user", Content: "1 回目", ToAgentID: "boss"})
+	tk := &Ticket{SessionID: sess.ID, Title: "続いている仕事"}
+	if err := st.CreateTicket(ctx, tk); err != nil {
+		t.Fatal(err)
+	}
+	from := put(t, st, &Message{SessionID: sess.ID, Role: "user", Content: "2 回目", ToAgentID: "boss"})
+	if _, err := st.UpdateTicket(ctx, sess.ID, tk.Number,
+		TicketPatch{Status: ptr(StatusInProgress)}, "boss"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := st.Rewind(ctx, sess.ID, from.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetTicket(ctx, sess.ID, tk.Number)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusInProgress {
+		t.Errorf("状態 = %q, want %q (中身は戻さない)", got.Status, StatusInProgress)
+	}
+	if len(got.Notes) != 1 {
+		t.Errorf("注記 = %d 件, want 1 (中身は戻さない)", len(got.Notes))
+	}
+}
