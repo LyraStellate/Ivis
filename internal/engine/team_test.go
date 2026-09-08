@@ -566,3 +566,130 @@ func TestPromptTellsLeadersToInstruct(t *testing.T) {
 		t.Error("下位の居ない相手を上司として扱っている")
 	}
 }
+
+// 「これから誰々に頼みます」と本文へ書いて終える手番は多い。書いた予定は
+// 誰にも届かず、ラウンドはそこで止まる。1 度だけ促して、送らせる (#640275)。
+func TestSilentTurnIsNudgedOnce(t *testing.T) {
+	f, sess := teamFixture(t, byMember(func(self string, nth int) []provider.Event {
+		if self == "lead" && nth == 0 {
+			// 予定を書くだけで終える。
+			return []provider.Event{text("これより hand へ実装を指示します"), {Type: provider.EventDone}}
+		}
+		if self == "lead" && nth == 1 {
+			// 促されて、はじめて送る。
+			return []provider.Event{sendTo("hand", "実装して"), {Type: provider.EventDone}}
+		}
+		return done()
+	}))
+	if err := f.eng.Run(context.Background(), sess.ID, "作って", f.emit); err != nil {
+		t.Fatal(err)
+	}
+
+	var got *Event
+	for i, e := range f.events {
+		if e.Type == EvtTeamMessage && e.AgentID == "lead" {
+			got = &f.events[i]
+		}
+	}
+	if got == nil {
+		t.Fatal("促しても送られていない")
+	}
+	if got.To != "hand" || !strings.Contains(got.Text, "実装して") {
+		t.Errorf("送られた先と本文 = %q / %q", got.To, got.Text)
+	}
+	// 促しは手番を増やさない。同じ手番の中で続きを書かせる。
+	if strings.Join(f.turns(), ",") != "lead,hand,lead" {
+		t.Errorf("手番 = %v", f.turns())
+	}
+
+	// 1 つの入力に念押しが 2 つ並ばないこと。並ぶなら、送るまで押し続けて
+	// いることになる。
+	seen, most := false, 0
+	for _, req := range f.mock.reqs {
+		if whoAmI(req) != "lead" {
+			continue
+		}
+		n := 0
+		for _, m := range req.Messages {
+			n += strings.Count(m.Content, "まだ誰にもメッセージを送っていません")
+		}
+		if n > 0 {
+			seen = true
+		}
+		if n > most {
+			most = n
+		}
+	}
+	if !seen {
+		t.Error("促していない")
+	}
+	if most > 1 {
+		t.Errorf("1 つの入力に促しが %d 個ある", most)
+	}
+
+	// 促しは会話に残さない。残すと、次の手番でも読まれて、何度も押されて
+	// いるように見える。
+	msgs, err := f.store.ListMessages(context.Background(), sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range msgs {
+		if strings.Contains(m.Content, "まだ誰にもメッセージを送っていません") {
+			t.Error("促しが会話に保存されている")
+		}
+	}
+}
+
+// 送った手番は促さない。押す理由が無く、生成が 1 回増えるだけになる。
+func TestSendingTurnIsNotNudged(t *testing.T) {
+	f, sess := teamFixture(t, byMember(func(self string, nth int) []provider.Event {
+		if self == "lead" && nth == 0 {
+			return []provider.Event{sendTo("hand", "やって"), {Type: provider.EventDone}}
+		}
+		return done()
+	}))
+	if err := f.eng.Run(context.Background(), sess.ID, "作って", f.emit); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(inputOf(f, "lead"), "まだ誰にもメッセージを送っていません") {
+		t.Error("送ったのに促している")
+	}
+}
+
+// 促しても配らなかった上位は、利用者から見ると何もしていない。ラウンドが
+// 黙って終わるので、理由を出す。
+func TestSilentLeadTellsTheUser(t *testing.T) {
+	f, sess := teamFixture(t, byMember(func(self string, nth int) []provider.Event {
+		return []provider.Event{text("考えています"), {Type: provider.EventDone}}
+	}))
+	if err := f.eng.Run(context.Background(), sess.ID, "作って", f.emit); err != nil {
+		t.Fatal(err)
+	}
+	var notice string
+	for _, e := range f.events {
+		if e.Type == EvtNotice {
+			notice = e.Text
+		}
+	}
+	if !strings.Contains(notice, "誰にも仕事を渡さずに") {
+		t.Errorf("止まった理由が出ていない: %q", notice)
+	}
+}
+
+// 下位を持たない相手が何も送らないのは、ふつうの終わり方である。騒がない。
+func TestSilentWorkerIsQuiet(t *testing.T) {
+	f, sess := teamFixture(t, byMember(func(self string, nth int) []provider.Event {
+		if self == "lead" && nth == 0 {
+			return []provider.Event{sendTo("hand", "やって"), {Type: provider.EventDone}}
+		}
+		return done()
+	}))
+	if err := f.eng.Run(context.Background(), sess.ID, "作って", f.emit); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range f.events {
+		if e.Type == EvtNotice && strings.Contains(e.Text, "誰にも仕事を渡さずに") {
+			t.Errorf("部下の手番に上司向けの知らせが出ている: %q", e.Text)
+		}
+	}
+}

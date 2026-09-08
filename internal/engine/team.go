@@ -138,6 +138,15 @@ func (e *Engine) runTeam(ctx context.Context, sess *store.Session, userText stri
 			continue
 		}
 
+		// 促しても誰にも渡さずに終わった手番。上に立つ相手がそうしたなら、
+		// 仕事は誰にも配られていない。ラウンドはそこで終わるので、利用者に
+		// は「何も起きなかった」ようにしか見えない。理由を出す。
+		if len(sent) == 0 && t.From == "" && len(roster.Subordinates(m.ID)) > 0 {
+			emit(Event{Type: EvtNotice, Text: fmt.Sprintf(
+				"%s は誰にも仕事を渡さずに手番を終えました。指示が必要なら、"+
+					"宛先を書いてもう一度送ってください。", m.ID)})
+		}
+
 		// 誰にも渡さずに終わった手番。依頼した側は、返事が来ないまま待ち
 		// 続けることになる。ラウンドはそこで空になって終わり、頼んだ仕事が
 		// どうなったのかは誰にも分からない。こちらで返す (#640275)。
@@ -237,8 +246,44 @@ func (e *Engine) runTurn(ctx context.Context, sess *store.Session, roster *team.
 	}
 
 	last, err := e.loop(ctx, rc)
+	if err != nil || len(sent) > 0 {
+		return sent, last, err
+	}
+
+	// 誰にも送らずに終わった。多いのは「これから誰々に頼みます」と本文へ
+	// 書いて満足してしまう形で、書いた予定は誰にも届かない。1 度だけ促す。
+	//
+	// 促してから諦めるのは、繕った返信で代わりに答えるより、本人に送らせる
+	// ほうが良いからである。促しても送らないなら、それは本当に送るものが
+	// 無かったということで、そのまま終える (#640275)。
+	if in.auto || len(roster.Members) < 2 {
+		return sent, last, err
+	}
+	rc.msgs = append(rc.msgs,
+		provider.Message{Role: provider.RoleAssistant, Content: last},
+		provider.Message{Role: provider.RoleUser, Content: nudge})
+
+	last2, err := e.loop(ctx, rc)
+	if strings.TrimSpace(last2) != "" {
+		last = last2
+	}
 	return sent, last, err
 }
+
+// nudge は、誰にも送らずに終えようとした手番へ 1 度だけ渡す念押し。
+//
+// 「送れ」とだけ書かない。送るものが本当に無い手番もあり、そこで無理に
+// 送らせると、意味のないメッセージが 1 通増えて手番も 1 つ減る。どちらの
+// 終わり方も正しいと明示したうえで、選ばせる。
+const nudge = `いまの手番では、まだ誰にもメッセージを送っていません。
+
+本文に「これから誰々に頼みます」と書いても、それは誰にも届きません。相手に
+動いてもらうには、この手番の中で send_message を呼ぶ必要があります。予定を
+書いただけで手番を終えると、そこで会話が止まります。
+
+誰かに動いてもらう必要があるなら、いま send_message を呼んでください。
+自分で答え切っていて、誰にも渡すものが無いなら、何も呼ばずにそのまま
+終えてください。それも正しい終わり方です。`
 
 // saveTeamMessage は 1 通を記録し、画面へ流し、次の手番の形にして返す。
 func (e *Engine) saveTeamMessage(ctx context.Context, sessionID, from string,
