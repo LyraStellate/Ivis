@@ -51,6 +51,13 @@ type Config struct {
 	// CommandTimeoutSec は run_command の実行時間の上限 (秒)。用途が違えば
 	// 妥当な長さも違うので、スクリプトの上限とは別に持つ。
 	CommandTimeoutSec int `json:"command_timeout_sec"`
+	// IdleTimeoutSec は、提供元から何も届かないまま待つ上限 (秒)。
+	//
+	// 生成そのものに上限は置かない。時間で切ると長い仕事ができなくなる。
+	// 上限を置くのは「何も届かない時間」で、これはモデルが考えている間では
+	// なく、通路が死んでいる間に伸びる。別の端末の Ollama を VPN 越しに
+	// 使うと通路は黙って落ち、落ちたことはどちらの側にも伝わらない。
+	IdleTimeoutSec int `json:"idle_timeout_sec"`
 	// RequireApproval が false のとき、承認を必要とするツールを確認なしで実行する。
 	RequireApproval bool `json:"require_approval"`
 	// AutoApprove に載せたツールは、既定で確認を求めるものであっても
@@ -110,6 +117,7 @@ func Default() *Config {
 		ContextTokens:      16384,
 		ScriptTimeoutSec:   120,
 		CommandTimeoutSec:  120,
+		IdleTimeoutSec:     300,
 		AutoApprove:        []string{},
 		SearchBackend:      websearch.Backends[0],
 		RequireApproval:    true,
@@ -269,6 +277,12 @@ func (c *Config) normalize() {
 	}
 	if c.ScriptTimeoutSec <= 0 {
 		c.ScriptTimeoutSec = d.ScriptTimeoutSec
+	}
+	if c.IdleTimeoutSec < 0 {
+		c.IdleTimeoutSec = 0
+	}
+	if c.IdleTimeoutSec == 0 {
+		c.IdleTimeoutSec = d.IdleTimeoutSec
 	}
 	if c.CommandTimeoutSec <= 0 {
 		c.CommandTimeoutSec = d.CommandTimeoutSec

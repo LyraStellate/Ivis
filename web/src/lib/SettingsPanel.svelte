@@ -55,6 +55,7 @@
         max_delegation_depth: cfg.max_delegation_depth,
         script_timeout_sec: cfg.script_timeout_sec,
         command_timeout_sec: cfg.command_timeout_sec,
+        idle_timeout_sec: cfg.idle_timeout_sec,
         require_approval: cfg.require_approval,
         auto_approve: cfg.auto_approve ?? [],
         search_backend: cfg.search_backend,
@@ -292,6 +293,11 @@
               <input type="number" bind:value={cfg.script_timeout_sec} /></label>
             <label>コマンドの実行時間の上限(秒)
               <input type="number" bind:value={cfg.command_timeout_sec} /></label>
+            <!-- 生成そのものに上限は置かない。時間で切ると長い仕事ができない。
+                 上限を置くのは「何も届かない時間」で、これはモデルが考えて
+                 いる間ではなく、通路が死んでいる間に伸びる。 -->
+            <label>無応答の上限(秒)
+              <input type="number" bind:value={cfg.idle_timeout_sec} /></label>
           </div>
         </fieldset>
 

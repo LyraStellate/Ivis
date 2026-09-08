@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/LyraStellate/Ivis/internal/provider"
@@ -19,16 +20,35 @@ import (
 type Client struct {
 	baseURL string
 	http    *http.Client
+	// idle は何も届かないまま待つ上限。
+	idle time.Duration
 }
 
 // New は指定した接続先の Client を返す。
+// DefaultIdle は、提供元から何も届かないまま待つ上限。
+//
+// 全体の時間には上限を置かない。生成は長く続きうるもので、時間で切ると
+// 長い仕事ができなくなる。上限を置くのは「何も届かない時間」のほうで、
+// これはモデルが考えている間ではなく、通路が死んでいる間に伸びる。
+//
+// 別の端末の Ollama を VPN 越しに使うと、通路は黙って落ちる。落ちたことは
+// どちらの側にも伝わらないので、時間切れが無ければ永久に待つ。実際に
+// 「道具の結果を返したあと、そのまま動かない」形で起きた。
+//
+// 5 分にしてあるのは、大きなモデルの読み込みがそこまで伸びうるためである。
+const DefaultIdle = 5 * time.Minute
+
 func New(baseURL string) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		// 生成は長く続きうるので全体のタイムアウトは置かない。中断は ctx で行う。
 		http: &http.Client{},
+		idle: DefaultIdle,
 	}
 }
+
+// SetIdle は何も届かないまま待つ上限を変える。0 以下なら見張らない。
+func (c *Client) SetIdle(d time.Duration) { c.idle = d }
 
 // Name は表示用の名前。
 func (c *Client) Name() string { return "ollama" }
@@ -106,7 +126,12 @@ func (c *Client) Chat(ctx context.Context, req provider.Request) (<-chan provide
 		body.Tools = append(body.Tools, td)
 	}
 
-	resp, err := c.post(ctx, body)
+	// 何も届かない時間を見張る。届くたびに数え直すので、長い生成は
+	// 妨げない。伸びるのは通路が死んでいるときだけである。
+	runCtx, cancel := context.WithCancel(ctx)
+	w := newWatch(c.idle, cancel)
+
+	resp, err := c.post(runCtx, body)
 	if err != nil {
 		// 推論を持たないモデルへ think を送ると断る実装がある。切ってある
 		// ときに限り、項目を落として送り直す。使わないと言っただけで会話が
@@ -114,16 +139,39 @@ func (c *Client) Chat(ctx context.Context, req provider.Request) (<-chan provide
 		var unsupported *provider.ThinkingUnsupportedError
 		if !req.Think && errors.As(err, &unsupported) {
 			body.Think = nil
-			resp, err = c.post(ctx, body)
+			w.seen()
+			resp, err = c.post(runCtx, body)
 		}
 		if err != nil {
+			w.stop()
+			cancel()
+			if w.expired() {
+				return nil, c.silent()
+			}
 			return nil, err
 		}
 	}
+	// 応答の頭が来た。ここから先は本文が届くたびに数え直す。
+	w.seen()
 
 	out := make(chan provider.Event, 32)
-	go c.stream(ctx, resp, req.Model, out)
+	go func() {
+		defer cancel()
+		defer w.stop()
+		c.stream(runCtx, resp, req.Model, out, w)
+	}()
 	return out, nil
+}
+
+// silent は、待っても何も届かなかったことを表す失敗。
+//
+// 提供元へ届いていないのか、届いたまま返らないのかは、こちらからは区別
+// できない。区別できないことを、次に取れる手とともに書く。
+func (c *Client) silent() error {
+	return fmt.Errorf("%w (%s): %s のあいだ応答が届きませんでした。"+
+		"接続 (VPN の切断など) か、モデルの読み込みが長すぎることが考えられます。"+
+		"設定の「無応答の上限」を延ばすか、接続先を確かめてください",
+		provider.ErrUnavailable, c.baseURL, c.idle)
 }
 
 // post は 1 回の生成要求を送り、応答の本体を返す。送り直すことがあるので
@@ -151,7 +199,45 @@ func (c *Client) post(ctx context.Context, body chatRequest) (*http.Response, er
 	return resp, nil
 }
 
-func (c *Client) stream(ctx context.Context, resp *http.Response, model string, out chan<- provider.Event) {
+// watch は、何も届かないまま待ち続けないための見張り。
+//
+// 届くたびに seen で数え直す。数え直されないまま上限を過ぎたら、要求ごと
+// 取り消す。取り消しは利用者による中断と同じ形で伝わるので、どちらだったかを
+// expired で見分けられるようにしておく — 黙って終わったように見せると、
+// 待っていた側は「終わったのか、落ちたのか」が分からない。
+type watch struct {
+	idle    time.Duration
+	timer   *time.Timer
+	timedUp atomic.Bool
+}
+
+func newWatch(idle time.Duration, cancel context.CancelFunc) *watch {
+	w := &watch{idle: idle}
+	if idle <= 0 {
+		return w
+	}
+	w.timer = time.AfterFunc(idle, func() {
+		w.timedUp.Store(true)
+		cancel()
+	})
+	return w
+}
+
+func (w *watch) seen() {
+	if w.timer != nil {
+		w.timer.Reset(w.idle)
+	}
+}
+
+func (w *watch) stop() {
+	if w.timer != nil {
+		w.timer.Stop()
+	}
+}
+
+func (w *watch) expired() bool { return w.timedUp.Load() }
+
+func (c *Client) stream(ctx context.Context, resp *http.Response, model string, out chan<- provider.Event, w *watch) {
 	defer close(out)
 	defer resp.Body.Close()
 
@@ -175,6 +261,20 @@ func (c *Client) stream(ctx context.Context, resp *http.Response, model string, 
 			if err == io.EOF {
 				break
 			}
+			if w.expired() {
+				// 待っても何も届かなかった。中断と同じ形で切れるので、
+				// ここで見分けて失敗として伝える。黙って終わったことに
+				// すると、画面には答え終わったように見える。
+				//
+				// send は ctx を見るが、その ctx は見張りが閉じたものである。
+				// 見る側で送ると、この最後の 1 件が届くかどうかが運になる。
+				// ここだけは通路の空きだけを見て置く。
+				select {
+				case out <- provider.Event{Type: provider.EventError, Err: c.silent()}:
+				default:
+				}
+				return
+			}
 			if ctx.Err() != nil {
 				// 利用者による中断。ここまでの出力は既に流してある。
 				send(provider.Event{Type: provider.EventDone})
@@ -183,6 +283,8 @@ func (c *Client) stream(ctx context.Context, resp *http.Response, model string, 
 			send(provider.Event{Type: provider.EventError, Err: fmt.Errorf("応答の解釈に失敗しました: %w", err)})
 			return
 		}
+		// 何かが届いた。見張りを数え直す。
+		w.seen()
 		if chunk.Error != "" {
 			send(provider.Event{Type: provider.EventError, Err: classify(model, 0, []byte(chunk.Error))})
 			return

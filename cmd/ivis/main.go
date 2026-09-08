@@ -63,7 +63,13 @@ func run() error {
 	skills := skillreg.New()
 	skills.Load(cfg.SkillPaths)
 
-	newProvider := func(baseURL string) provider.Provider { return ollama.New(baseURL) }
+	// 何も届かないまま待ち続けないよう、見張りの長さを設定から渡す。
+	// 通路が死んでいることは、こちら側からは待ち続ける形でしか現れない。
+	newProvider := func(baseURL string) provider.Provider {
+		c := ollama.New(baseURL)
+		c.SetIdle(time.Duration(cfg.IdleTimeoutSec) * time.Second)
+		return c
+	}
 
 	srv := httpapi.New(httpapi.Deps{
 		Config:      cfg,
