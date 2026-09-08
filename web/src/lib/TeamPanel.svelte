@@ -82,21 +82,32 @@
   let busy = $state(false)
   let error = $state(null)
 
-  // 並びは優先度の高い順、同じなら期限の近い順。期限を持たないものは後ろへ。
-  // 番号順に並べると、いま効いている仕事が古い番号の下に沈む。
-  const shown = $derived.by(() => {
-    const list = (tickets ?? []).filter((t) => showClosed || t.status !== '終了')
-    return [...list].sort((a, b) => {
-      const p = PRIORITIES.indexOf(b.priority) - PRIORITIES.indexOf(a.priority)
-      if (p !== 0) return p
-      if (a.due !== b.due) {
-        if (!a.due) return 1
-        if (!b.due) return -1
-        return a.due < b.due ? -1 : 1
-      }
-      return a.number - b.number
-    })
+  // 状態ごとの列に分ける。左から 新規 → 終了 で、仕事が左から右へ流れる。
+  // 1 本の並びだと、どこで止まっているのかを読み取るのに全部を見ることに
+  // なる。列に分ければ、詰まっている場所が形で分かる。
+  //
+  // 列の中は優先度の高い順、同じなら期限の近い順。番号順に並べると、いま
+  // 効いている仕事が古い番号の下に沈む。
+  function byWeight(a, b) {
+    const p = PRIORITIES.indexOf(b.priority) - PRIORITIES.indexOf(a.priority)
+    if (p !== 0) return p
+    if (a.due !== b.due) {
+      if (!a.due) return 1
+      if (!b.due) return -1
+      return a.due < b.due ? -1 : 1
+    }
+    return a.number - b.number
+  }
+
+  const columns = $derived.by(() => {
+    const names = showClosed ? STATUSES : STATUSES.filter((s) => s !== '終了')
+    return names.map((status) => ({
+      status,
+      items: (tickets ?? []).filter((t) => t.status === status).sort(byWeight),
+    }))
   })
+
+  const shown = $derived(columns.reduce((n, c) => n + c.items.length, 0))
 
   // 状態と優先度の並びはサーバーが決める。画面に書き写すと、増やしたときに
   // 片方だけ古くなる。いまは固定なので、値そのものを並びとして持つ。
@@ -264,7 +275,7 @@
   <section class="grow">
     <button class="head" onclick={() => (open.tickets = !open.tickets)} aria-expanded={open.tickets}>
       <span class="caret" class:on={open.tickets}></span>チケット
-      <span class="n">{shown.length}</span>
+      <span class="n">{shown}</span>
     </button>
     {#if open.tickets}
       <p class="lede">
@@ -276,42 +287,55 @@
           <input type="checkbox" bind:checked={showClosed} /> 終了も出す
         </label>
       </div>
-      {#each shown as t (t.number)}
-        <!-- 1 行に詰め込むと、題が切れて何の仕事か分からない。題を主に置き、
-             状態と担当はその周りへ回す。 -->
-        <div class="card" class:closed={t.status === '終了'}>
-          <button class="open" onclick={() => (detail = t)}>
-            <div class="top">
-              <span class="tnum mono">#{t.number}</span>
-              <span class="st s{STATUSES.indexOf(t.status)}">{t.status}</span>
-              {#if t.priority === '緊急' || t.priority === '高'}
-                <span class="pri" class:urgent={t.priority === '緊急'}>{t.priority}</span>
-              {/if}
-            </div>
-            <p class="ttitle">{t.title}</p>
-            <div class="foot">
-              <span class="who" class:none={!t.assignee}>
-                {t.assignee || '未割り当て'}
-              </span>
-              {#if t.due}<span class="due mono">{t.due}</span>{/if}
-              {#if t.note_count}<span class="notes">注記 {t.note_count}</span>{/if}
-            </div>
-          </button>
-          <button
-            class="kill quiet"
-            title="このチケットを消す"
-            aria-label="このチケットを消す"
-            onclick={() => (pendingTicket = t)}
-          >
-            <svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true">
-              <path d="M3 3 L9 9 M9 3 L3 9" fill="none" stroke="currentColor" stroke-width="1.6"
-                stroke-linecap="round" />
-            </svg>
-          </button>
-        </div>
-      {:else}
+      {#if shown === 0}
         <p class="empty">まだありません。</p>
-      {/each}
+      {:else}
+        <!-- 列は横に並べ、幅が足りなければ横へ流す。パネルを広げれば全部が
+             一度に見える。 -->
+        <div class="board">
+          {#each columns as col (col.status)}
+            <div class="col" class:done={col.status === '終了'}>
+              <p class="colhead s{STATUSES.indexOf(col.status)}">
+                {col.status}<span class="cn">{col.items.length}</span>
+              </p>
+              {#each col.items as t (t.number)}
+                <!-- 題を主に置く。状態は列が示しているので、札には出さない。 -->
+                <div class="card" class:closed={t.status === '終了'}>
+                  <button class="open" onclick={() => (detail = t)}>
+                    <div class="top">
+                      <span class="tnum mono">#{t.number}</span>
+                      {#if t.priority === '緊急' || t.priority === '高'}
+                        <span class="pri" class:urgent={t.priority === '緊急'}>{t.priority}</span>
+                      {/if}
+                    </div>
+                    <p class="ttitle">{t.title}</p>
+                    <div class="foot">
+                      <span class="who" class:none={!t.assignee}>
+                        {t.assignee || '未割り当て'}
+                      </span>
+                      {#if t.due}<span class="due mono">{t.due}</span>{/if}
+                      {#if t.note_count}<span class="notes">注記 {t.note_count}</span>{/if}
+                    </div>
+                  </button>
+                  <button
+                    class="kill quiet"
+                    title="このチケットを消す"
+                    aria-label="このチケットを消す"
+                    onclick={() => (pendingTicket = t)}
+                  >
+                    <svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true">
+                      <path d="M3 3 L9 9 M9 3 L3 9" fill="none" stroke="currentColor"
+                        stroke-width="1.6" stroke-linecap="round" />
+                    </svg>
+                  </button>
+                </div>
+              {:else}
+                <p class="colempty">—</p>
+              {/each}
+            </div>
+          {/each}
+        </div>
+      {/if}
     {/if}
   </section>
 
@@ -513,7 +537,49 @@
     font-size: 10px;
   }
 
-  /* 1 枚のカード。題を読ませたいので、状態と担当はその上下へ回す。 */
+  /* 状態ごとの列。左から右へ、仕事が進む向きに並べる。パネルが狭ければ
+     横へ流す — 縦に積み直すと、左から右へという意味が消える。 */
+  .board {
+    display: flex;
+    gap: 5px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+  .col {
+    flex: 1 0 132px;
+    min-width: 0;
+  }
+  .col.done { opacity: 0.6; }
+  .colhead {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin: 0 0 4px;
+    padding: 2px 5px;
+    border-radius: var(--radius);
+    background: var(--g4);
+    color: var(--fg-dim);
+    font-size: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .colhead .cn {
+    margin-left: auto;
+    color: var(--g9);
+    font-weight: 400;
+  }
+  .colempty {
+    margin: 0;
+    padding: 6px 0;
+    text-align: center;
+    color: var(--g7);
+    font-size: 10px;
+  }
+
+  /* 1 枚のカード。題を読ませたいので、番号と担当はその上下へ回す。 */
   .card {
     position: relative;
     margin-bottom: 5px;
@@ -554,18 +620,25 @@
     overflow: hidden;
     overflow-wrap: anywhere;
   }
+  /* 列は狭い。入り切らなければ折り返す。切り詰めると、担当も期限も
+     読めない断片になる。 */
   .foot {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 7px;
+    gap: 2px 6px;
     margin-top: 4px;
     font-size: 10px;
     color: var(--g9);
   }
-  .foot .who { color: var(--fg-dim); }
+  .foot .who {
+    color: var(--fg-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+  }
   .foot .who.none { color: var(--g9); font-style: italic; }
-  .foot .due { margin-left: auto; }
-  .foot .notes { flex: none; }
 
   /* 消す手。取り消せないので、hover で出す位置に置く。 */
   .kill {
@@ -583,19 +656,12 @@
   .card:hover .kill,
   .kill:focus-visible { opacity: 1; }
   .kill:hover { color: var(--danger-text); background: var(--danger-surface); }
-  /* 状態は色で見分ける。文字だけだと、一覧を目で流したときに拾えない。 */
-  .st {
-    flex: none;
-    padding: 0 5px;
-    border-radius: 999px;
-    font-size: 9px;
-    line-height: 15px;
-    border: 1px solid var(--border);
-    color: var(--fg-dim);
-  }
-  .st.s1 { border-color: var(--accent-line); color: var(--accent-line); }
-  .st.s2, .st.s3 { border-color: var(--ok, var(--accent-line)); color: var(--ok, var(--accent-line)); }
-  .st.s4 { color: var(--g9); }
+  /* 列の見出しは状態ごとに色を変える。文字だけだと、目で流したときに
+     どこが進行中の列なのかを毎回読むことになる。 */
+  .colhead.s1 { color: var(--accent-line); }
+  .colhead.s2,
+  .colhead.s3 { color: var(--ok, var(--accent-line)); }
+  .colhead.s4 { color: var(--g9); }
   .pri {
     flex: none;
     margin-left: auto;

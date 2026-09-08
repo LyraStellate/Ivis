@@ -64,7 +64,7 @@
   // 右パネルの幅。中身は会話ごとに違う (題の長いチケット、名前の長い担当) ので、
   // 決め打ちの幅では足りたり余ったりする。掴んで変えられるようにし、選んだ幅は
   // 覚えておく。開き直すたびに戻ると、変えられないのとほとんど同じになる。
-  const PANEL = { min: 200, max: 620, base: 264 }
+  const PANEL = { min: 200, max: 620, base: 340 }
   let panelWidth = $state(storedWidth())
   let sizing = $state(false)
 

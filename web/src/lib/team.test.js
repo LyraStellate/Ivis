@@ -391,7 +391,7 @@ describe('チケットのカード', () => {
   })
 
   // 1 行に詰め込むと題が切れて、何の仕事か分からない。題を主に置く。
-  it('番号・状態・題・担当・期限・注記の数を出す', () => {
+  it('番号・題・担当・期限・注記の数を出す', () => {
     const { target, app } = render([
       tk({ assignee: 'hand', due: '2026-09-30', note_count: 3, status: '進行中' }),
     ])
@@ -399,10 +399,11 @@ describe('チケットのカード', () => {
     expect(card).not.toBe(null)
     expect(card.querySelector('.ttitle').textContent).toBe('設計の確認')
     expect(card.textContent).toContain('#1')
-    expect(card.textContent).toContain('進行中')
     expect(card.textContent).toContain('hand')
     expect(card.textContent).toContain('2026-09-30')
     expect(card.textContent).toContain('注記 3')
+    // 状態は列が示している。札にも出すと同じことが 2 か所に並ぶ。
+    expect(card.textContent).not.toContain('進行中')
     unmount(app)
   })
 
@@ -425,7 +426,7 @@ describe('チケットのカード', () => {
 
   // 並びは優先度の高い順、同じなら期限の近い順。番号順だと、いま効いている
   // 仕事が古い番号の下に沈む。
-  it('優先度と期限で並べ替える', () => {
+  it('列の中を優先度と期限で並べ替える', () => {
     const { target, app } = render([
       tk({ number: 1, title: '低い', priority: '低' }),
       tk({ number: 2, title: '遅い期限', priority: '高', due: '2026-12-01' }),
@@ -437,12 +438,50 @@ describe('チケットのカード', () => {
     unmount(app)
   })
 
-  it('終了は既定で出さない', () => {
+  it('終了の列は既定で出さない', () => {
     const { target, app } = render([tk({ status: '終了' })])
     expect(target.querySelector('.card')).toBe(null)
+    expect([...target.querySelectorAll('.colhead')].map((e) => e.textContent)).toEqual([])
     target.querySelector('.closed input[type="checkbox"]').click()
     flushSync()
     expect(target.querySelector('.card.closed')).not.toBe(null)
+    unmount(app)
+  })
+
+  // 状態ごとの列に分け、左から新規 → 終了 で並べる。1 本の並びだと、どこで
+  // 止まっているのかを読み取るのに全部を見ることになる。
+  it('状態ごとの列を左から順に並べる', () => {
+    const { target, app } = render([
+      tk({ number: 1, title: 'a', status: 'レビュー' }),
+      tk({ number: 2, title: 'b', status: '新規' }),
+    ])
+    const heads = [...target.querySelectorAll('.colhead')].map((e) =>
+      e.textContent.replace(/\d+$/, ''),
+    )
+    expect(heads).toEqual(['新規', '進行中', '解決', 'レビュー'])
+    unmount(app)
+  })
+
+  it('札はその状態の列に入り、列は件数を出す', () => {
+    const { target, app } = render([
+      tk({ number: 1, title: 'a', status: '進行中' }),
+      tk({ number: 2, title: 'b', status: '進行中' }),
+      tk({ number: 3, title: 'c', status: '新規' }),
+    ])
+    const cols = [...target.querySelectorAll('.col')]
+    const titles = cols.map((c) => [...c.querySelectorAll('.ttitle')].map((e) => e.textContent))
+    expect(titles[0]).toEqual(['c'])
+    expect(titles[1]).toEqual(['a', 'b'])
+    expect(titles[2]).toEqual([])
+    expect(cols[1].querySelector('.cn').textContent).toBe('2')
+    unmount(app)
+  })
+
+  // 空の列も残す。詰まっている場所は、空いている列があってはじめて形で分かる。
+  it('空の列も残す', () => {
+    const { target, app } = render([tk({ status: '新規' })])
+    expect(target.querySelectorAll('.col')).toHaveLength(4)
+    expect(target.querySelectorAll('.colempty')).toHaveLength(3)
     unmount(app)
   })
 
