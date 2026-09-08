@@ -43,6 +43,12 @@ type Server struct {
 	// 占有ではなくここが持つ。
 	procs *tools.ProcSet
 
+	// liveMu と lives は、走っている実行の中継。会話ごとに 1 つで、次の実行が
+	// 始まれば置き換わる。画面が離れても実行は続くので、要求ではなくここが
+	// 経過を持つ。
+	liveMu sync.Mutex
+	lives  map[string]*live
+
 	mu sync.Mutex
 	// pending は承認待ちの応答先。
 	pending map[string]chan bool
@@ -80,6 +86,7 @@ func New(d Deps) *Server {
 		assets:  d.Assets,
 		runs:    engine.NewRuns(),
 		procs:   tools.NewProcSet(),
+		lives:   map[string]*live{},
 		pending: map[string]chan bool{},
 		asking:  map[string]chan string{},
 	}
@@ -165,6 +172,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/sessions/{id}", s.handleDeleteSession)
 	mux.HandleFunc("GET /api/sessions/{id}/messages", s.handleMessages)
 	mux.HandleFunc("POST /api/sessions/{id}/messages", s.handleSend)
+	// 走っている実行へ繋ぎ直す。ブラウザを更新しても、続きが見える。
+	mux.HandleFunc("GET /api/sessions/{id}/stream", s.handleAttach)
 	mux.HandleFunc("POST /api/sessions/{id}/cancel", s.handleCancel)
 	mux.HandleFunc("POST /api/sessions/{id}/rewind", s.handleRewind)
 

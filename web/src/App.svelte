@@ -114,6 +114,12 @@
     commands = (await guard(api.listCommands)) ?? []
   }
 
+  // 走っている会話は、開いていなくても一覧に印を出す。開いた時点ではじめて
+  // 分かる形だと、更新したあと「どれが動いているのか」を探すことになる。
+  const runningIds = $derived(
+    new Set([...sessions.filter((s) => s.running).map((s) => s.id), runningId].filter(Boolean)),
+  )
+
   async function openSession(id) {
     if (id === currentId) return
     // 生成中でも開ける。離れた会話の続きは、終わってから履歴として届く。
@@ -127,6 +133,10 @@
     roster = null
     tickets = []
     if (session?.kind === 'team') await loadTeam(id)
+    // 開いた会話が走っているなら、その続きへ繋ぎ直す。実行はブラウザの都合と
+    // 切り離して走っているので、更新しても止まっていない。繋がなければ、
+    // 動いているのに動いていないように見える。
+    if (session?.running && runningId == null) follow(id)
   }
 
   // 名簿とチケットを取り直す。会話をまたいで持ち越さないよう、いま開いて
@@ -245,17 +255,31 @@
   async function send(text) {
     if (!currentId || runningId != null) return
     const sid = currentId
+    tx.pushUser(text)
+    controller = new AbortController()
+    await consume(sid, api.send(sid, text, controller.signal))
+  }
+
+  // follow は既に走っている実行へ繋ぎ直す。送るものは無いので、入力欄へ
+  // 置いた本文も無い。
+  async function follow(sid) {
+    if (runningId != null) return
+    controller = new AbortController()
+    await consume(sid, api.attach(sid, controller.signal))
+  }
+
+  // consume は届く経過を 1 か所で捌く。送って始めたのか、繋ぎ直したのかで
+  // 変わるのは始め方だけで、受け取り方は同じである。
+  async function consume(sid, events) {
     runningId = sid
     detached = false
     notice = null
-    tx.pushUser(text)
-    controller = new AbortController()
     // 何かが届いた最後の時刻。無音が続いていることを画面が知る唯一の手がかり。
     moved = Date.now()
     stage = { label: '返答を待っています' }
 
     try {
-      for await (const ev of api.send(sid, text, controller.signal)) {
+      for await (const ev of events) {
         moved = Date.now()
         if (currentId !== sid) detached = true
         if (detached) continue
@@ -264,6 +288,10 @@
         if (ev.type === 'usage') {
           usage = ev.context_limit ? { tokens: ev.prompt_tokens ?? 0, limit: ev.context_limit } : null
         }
+        // 一覧が古くなったという知らせ。中身は載っていないので、引き直す。
+        // 載せてもらう形にすると、同じものを 2 つの経路で組み立てることに
+        // なり、食い違ったときにどちらが正か決められない。
+        if (ev.type === 'changed' && ev.text === 'tickets') refreshTickets()
         tx.apply(ev)
       }
     } catch (e) {
@@ -273,7 +301,7 @@
       controller = null
       stage = null
       if (!detached) {
-        // 生成中のまま取り残された項目を閉じる。ここで全件を取り直さない。
+        // 生成中のまま取り残された項目を閉じる。
         tx.settle()
       }
       // 一覧の表題と並びだけ更新する。
@@ -282,13 +310,14 @@
         sessions = list
         session = list.find((s) => s.id === currentId) ?? session
       }
-      // チケットは手番の中で変わる。ラウンドが終わったところで取り直す。
-      if (!detached && currentId === sid) await refreshTickets()
-      // 離れている間に進んだ分は画面に無い。戻っていれば取り直す。
-      if (detached && currentId === sid) {
+      // 終わったら必ず履歴を読み直す。流れてくる経過は「いま動いている」を
+      // 伝えるためのもので、正しいのは常にデータベースのほうである。取り
+      // こぼしても、繋ぎ直しで重なっても、ここで揃う。
+      if (currentId === sid) {
         const history = await guard(() => api.listMessages(sid))
-        tx.loadHistory(history ?? [])
+        if (history) tx.loadHistory(history)
         usage = usageOf(session)
+        await refreshTickets()
       }
       detached = false
     }
@@ -390,7 +419,7 @@
     {agents}
     {status}
     {currentId}
-    {runningId}
+    {runningIds}
     onOpen={openSession}
     onNew={newSession}
     onNewTeam={(a) => newSession(a, 'team')}

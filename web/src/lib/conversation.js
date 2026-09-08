@@ -264,7 +264,18 @@ export class Transcript {
         break
       }
 
-      case 'message_start':
+      // 繋ぎ直したときは、それまでの経過がもう一度流れてくる。同じ識別子で
+      // 2 度目が来たら、押し直すのではなく空へ戻して組み立て直す。押すと
+      // 同じ発言が並び、戻さないと本文が二重になる。
+      case 'message_start': {
+        const seen = findDeep(this.items, (x) => x.id === ev.message_id)
+        if (seen) {
+          seen.status = 'streaming'
+          seen.text = ''
+          seen.thinking = ''
+          seen.error = ''
+          break
+        }
         box.push({
           id: ev.message_id,
           kind: 'agent',
@@ -276,6 +287,7 @@ export class Transcript {
           error: '',
         })
         break
+      }
 
       case 'delta': {
         const it = findById(box, ev.message_id)
@@ -298,7 +310,13 @@ export class Transcript {
         break
       }
 
-      case 'tool_call':
+      case 'tool_call': {
+        const seen = findDeep(this.items, (x) => x.id === ev.tool_call_id)
+        if (seen) {
+          seen.status = 'running'
+          seen.result = ''
+          break
+        }
         box.push({
           id: ev.tool_call_id,
           kind: 'tool',
@@ -309,6 +327,7 @@ export class Transcript {
           startedAt: Date.now(),
         })
         break
+      }
 
       case 'approval_request': {
         const it = findById(box, ev.tool_call_id)
@@ -378,7 +397,8 @@ export class Transcript {
       }
 
       // メンバーが送った 1 通。手番の切り替わりはこれで見える。
-      case 'team_message':
+      case 'team_message': {
+        if (findDeep(this.items, (x) => x.id === ev.message_id)) break
         this.items.push({
           id: ev.message_id,
           kind: 'team',
@@ -393,6 +413,7 @@ export class Transcript {
           time: new Date().toISOString(),
         })
         break
+      }
 
       // 手番の入れ替わり。会話の項目は増やさない。誰が動いているかは末尾の
       // 待っている行が出す。ここで行を足すと、送ったメッセージと二重になる。
@@ -400,10 +421,20 @@ export class Transcript {
       case 'turn_end':
         break
 
+      // 一覧が古くなった、という知らせ。会話の項目にはならない。
+      case 'changed':
+        break
+
       // 失敗ではない知らせ。圧縮したことなど、会話の見え方が変わったこと。
-      case 'notice':
+      //
+      // 繋ぎ直しで同じ知らせが 2 度流れることがある。文と種類が同じものが
+      // 既に末尾に居るなら置き直さない。
+      case 'notice': {
+        const last = this.items[this.items.length - 1]
+        if (last?.kind === 'notice' && last.text === (ev.text ?? '')) break
         box.push({ id: localId('notice'), kind: 'notice', status: 'done', text: ev.text ?? '' })
         break
+      }
 
       case 'error': {
         const it = findById(box, ev.message_id)

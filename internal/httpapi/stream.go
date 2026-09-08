@@ -10,6 +10,7 @@ import (
 	"github.com/LyraStellate/Ivis/internal/command"
 	"github.com/LyraStellate/Ivis/internal/engine"
 	"github.com/LyraStellate/Ivis/internal/store"
+	"github.com/LyraStellate/Ivis/internal/tools"
 )
 
 // handleSend は 1 ターンを実行し、経過を SSE で流す。
@@ -43,9 +44,8 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		writeError(w, http.StatusInternalServerError, errors.New("ストリーミングに対応していません"))
+	if _, ok := w.(http.Flusher); !ok {
+		writeError(w, http.StatusInternalServerError, errWriterCannotStream)
 		return
 	}
 
@@ -56,43 +56,40 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithCancel(r.Context())
+	// 実行はこの要求の寿命から切り離す。要求に紐づけると、ブラウザを更新した
+	// 瞬間に走っていた生成ごと止まる。書きかけのファイルも、承認待ちの手番も
+	// そこで捨てられる。止めるのは利用者が止めたときだけにする。
+	ctx, cancel := context.WithCancel(context.Background())
 	if !s.runs.Begin(id, cancel) {
 		cancel()
 		writeError(w, http.StatusConflict, errors.New("このセッションは生成中です"))
 		return
 	}
-	defer s.runs.End(id)
 
-	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-	flusher.Flush()
+	lv := s.beginLive(id)
+	go func() {
+		defer s.runs.End(id)
+		defer lv.close()
 
-	send := func(ev engine.Event) {
-		b, err := json.Marshal(ev)
-		if err != nil {
-			return
+		if err := s.eng.Run(ctx, id, in.Text, lv.emit); err != nil {
+			if ctx.Err() != nil {
+				// 利用者による中断。部分出力は保存済みなので、その旨だけ伝える。
+				lv.emit(engine.Event{Type: engine.EvtDone, Text: "中断しました"})
+				return
+			}
+			// 実行ループが既に流した失敗は、ここでもう一度流さない。同じ文が
+			// 2 度並ぶと、どちらを読めばよいか分からなくなる。
+			if !engine.Reported(err) {
+				lv.emit(engine.Event{Type: engine.EvtError, Error: err.Error(), Kind: kindOf(err)})
+			}
 		}
-		fmt.Fprintf(w, "data: %s\n\n", b)
-		flusher.Flush()
-	}
+	}()
 
-	if err := s.eng.Run(ctx, id, in.Text, send); err != nil {
-		if ctx.Err() != nil {
-			// 利用者による中断。部分出力は保存済みなので、その旨だけ伝える。
-			send(engine.Event{Type: engine.EvtDone, Text: "中断しました"})
-			return
-		}
-		// 実行ループが既に流した失敗は、ここでもう一度流さない。同じ文が
-		// 2 度並ぶと、どちらを読めばよいか分からなくなる。
-		if !engine.Reported(err) {
-			send(engine.Event{Type: engine.EvtError, Error: err.Error(), Kind: kindOf(err)})
-		}
-	}
+	s.follow(w, r, lv)
 }
+
+// errWriterCannotStream は応答が少しずつ書けないこと。
+var errWriterCannotStream = errors.New("ストリーミングに対応していません")
 
 // runCommand はコマンドを実行し、その返事を生成と同じ経路で流す。
 //
@@ -138,6 +135,9 @@ func (s *Server) runCommand(w http.ResponseWriter, r *http.Request, sess *store.
 	}
 	send(engine.Event{Type: engine.EvtNotice,
 		Text: command.Run(r.Context(), deps, sess, name, arg)})
+
+	// /clear はチケットも消す。伝えないと、消えた一覧が出たままになる。
+	send(engine.Event{Type: engine.EvtChanged, Text: tools.ChangedTickets})
 
 	// 履歴を消す・まとめるコマンドは使用量を変える。伝えないと、既に空いて
 	// いるのに満杯のままの割合が出続ける。

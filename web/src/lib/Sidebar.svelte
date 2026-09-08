@@ -6,7 +6,7 @@
     agents,
     status,
     currentId,
-    runningId,
+    runningIds = new Set(),
     onOpen,
     onNew,
     onNewTeam,
@@ -65,7 +65,7 @@
               {#if s.kind === 'team'}<span class="team" title="チームセッション">◇</span>{/if}
               {s.title}
             </span>
-            {#if s.id === runningId}
+            {#if runningIds.has(s.id)}
               <span class="run" title="生成中"><i></i><i></i><i></i></span>
             {:else if s.kind === 'team'}
               <!-- チームには担当が 1 人ではない。1 つの名前を出すと嘘になる。 -->

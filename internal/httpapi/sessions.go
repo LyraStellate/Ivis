@@ -15,10 +15,18 @@ import (
 type sessionBody struct {
 	*store.Session
 	Workspace string `json:"workspace"`
+	// Running はいま生成が走っているか。画面はこれを見て、開いた時点で
+	// 走っているものへ繋ぎ直す。持たないと、更新したあと「動いていない」
+	// ように見えたまま止まる。
+	Running bool `json:"running"`
 }
 
 func (s *Server) body(sess *store.Session) sessionBody {
-	return sessionBody{Session: sess, Workspace: s.cfg.SessionWorkspace(sess.Kind, sess.ID)}
+	return sessionBody{
+		Session:   sess,
+		Workspace: s.cfg.SessionWorkspace(sess.Kind, sess.ID),
+		Running:   s.runs.Running(sess.ID),
+	}
 }
 
 func (s *Server) bodies(list []*store.Session) []sessionBody {

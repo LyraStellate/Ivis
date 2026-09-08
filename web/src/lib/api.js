@@ -96,7 +96,27 @@ export async function* send(sessionId, text, signal) {
     err.kind = body.kind
     throw err
   }
+  yield* events(res)
+}
 
+// attach は既に走っている実行へ繋ぎ直す。走っていなければ何も返さない。
+//
+// 実行はブラウザの都合と切り離して走っているので、更新しても止まらない。
+// 画面はここから続きを受け取る。それまでの経過も流れてくるので、開き直した
+// 直後の並びは、離れる前と同じところまで戻る。
+export async function* attach(sessionId, signal) {
+  const res = await fetch(`/api/sessions/${sessionId}/stream`, { signal })
+  if (res.status === 204) return
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }))
+    const err = new Error(body.error || '繋ぎ直せませんでした')
+    err.kind = body.kind
+    throw err
+  }
+  yield* events(res)
+}
+
+async function* events(res) {
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
   let buf = ''
