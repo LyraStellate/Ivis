@@ -165,7 +165,7 @@ func TestTeamToolsAreHiddenInSeries(t *testing.T) {
 		team = append(team, d.Name)
 	}
 	for _, name := range []string{"send_message", "create_ticket", "update_ticket",
-		"get_ticket", "list_tickets"} {
+		"get_ticket", "list_tickets", "delete_ticket"} {
 		if contains(series, name) {
 			t.Errorf("直列の会話に %s が渡っている", name)
 		}

@@ -139,6 +139,9 @@ func (e *Engine) runOneTool(ctx context.Context, rc *runCtx, callID string, call
 		// そもそもモデルへ渡らない (#640275)。
 		Team:    teamContext(rc),
 		Tickets: e.Store,
+		Notice: func(text string) {
+			rc.emit(Event{Type: EvtNotice, AgentID: rc.agent.ID, Text: text})
+		},
 	}
 	return tool.Execute(ctx, ec, call.Arguments)
 }

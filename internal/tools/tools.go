@@ -53,6 +53,10 @@ type ExecContext struct {
 	Team *TeamContext
 	// Tickets はチケットの読み書き先。チーム専用のツールだけが使う (#189542)。
 	Tickets *store.Store
+	// Notice は利用者への知らせを 1 件出す。取り消せない操作を、道具の
+	// 結果としてモデルへ返すだけで済ませないために要る。モデルにしか
+	// 見えない場所に書いても、消えたことは誰にも伝わらない。
+	Notice func(text string)
 }
 
 // Tool はモデルから呼べる 1 つの機能。
@@ -101,6 +105,7 @@ func NewRegistry() *Registry {
 	r.Add(&updateTicketTool{})
 	r.Add(&getTicketTool{})
 	r.Add(&listTicketsTool{})
+	r.Add(&deleteTicketTool{})
 	return r
 }
 

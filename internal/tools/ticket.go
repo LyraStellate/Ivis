@@ -43,9 +43,10 @@ func assigneeOK(ec *ExecContext, id string) error {
 	return nil
 }
 
-// 起票と更新は一覧を古くする。読むだけのものは何も変えない。
+// 起票と更新と削除は一覧を古くする。読むだけのものは何も変えない。
 func (t *createTicketTool) Changes() string { return ChangedTickets }
 func (t *updateTicketTool) Changes() string { return ChangedTickets }
+func (t *deleteTicketTool) Changes() string { return ChangedTickets }
 
 // ChangedTickets はチケットの一覧が古くなったことを表す名前。
 const ChangedTickets = "tickets"
@@ -165,6 +166,46 @@ func (t *updateTicketTool) Execute(ctx context.Context, ec *ExecContext, args ma
 	}
 	return fmt.Sprintf("#%d を更新しました (%s / %s / 担当 %s)。",
 		tk.Number, tk.Status, tk.Priority, orNobody(tk.Assignee)), nil
+}
+
+type deleteTicketTool struct{ ticketBase }
+
+func (t *deleteTicketTool) Name() string { return "delete_ticket" }
+func (t *deleteTicketTool) Description() string {
+	return "チケットを 1 件、注記ごと消す。取り消せない。" +
+		"要らなくなった票を片付けるためのもので、終わった仕事は消さずに状態を終了にすること。"
+}
+func (t *deleteTicketTool) Parameters() map[string]any {
+	return schema(map[string]any{
+		"number": map[string]any{"type": "integer", "description": "チケットの番号。"},
+	}, "number")
+}
+
+// 承認は求めない。ほかのチケットの操作と揃える — 1 歩ごとに止まるとチームが
+// 動かない。人だけに許していた理由は「消えたことが誰にも見えない」ことだった
+// ので、そちらは消したことを会話へ知らせる形で受ける (#189542)。
+func (t *deleteTicketTool) Execute(ctx context.Context, ec *ExecContext, args map[string]any) (string, error) {
+	st, sid, err := ticketsOf(ec)
+	if err != nil {
+		return "", err
+	}
+	num := argInt(args, "number")
+	if num <= 0 {
+		return "", fmt.Errorf("number にチケットの番号を指定してください")
+	}
+	// 消す前に題を読む。消えたあとでは、何を消したのか誰にも分からない。
+	tk, err := st.GetTicket(ctx, sid, num)
+	if err != nil {
+		return "", err
+	}
+	if err := st.DeleteTicket(ctx, sid, num); err != nil {
+		return "", err
+	}
+	if ec.Notice != nil {
+		ec.Notice(fmt.Sprintf("#%d %s を消しました (%s)。注記も一緒に消えています。",
+			tk.Number, tk.Title, ec.AgentID))
+	}
+	return fmt.Sprintf("#%d %s を消しました。注記も一緒に消えています。", tk.Number, tk.Title), nil
 }
 
 type getTicketTool struct{ ticketBase }
