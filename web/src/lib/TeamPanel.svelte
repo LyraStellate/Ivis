@@ -163,8 +163,18 @@
     )
     if (t) {
       await onTickets()
-      detail = t
+      await open1(t.number)
     }
+  }
+
+  // 1 件を開く。一覧の行をそのまま渡してはいけない。
+  //
+  // 一覧 (list_tickets) は注記の数だけを返し、本文は返さない。行をそのまま
+  // 渡すと、注記が 3 件あると札に出ているのに、開いた先では「まだありません」
+  // になる。開く前に引き直す (#189542)。
+  async function open1(number) {
+    const full = await guard(() => api.getTicket(sessionId, number))
+    if (full) detail = full
   }
 
   async function refreshDetail(updated) {
@@ -301,7 +311,7 @@
               {#each col.items as t (t.number)}
                 <!-- 題を主に置く。状態は列が示しているので、札には出さない。 -->
                 <div class="card" class:closed={t.status === '終了'}>
-                  <button class="open" onclick={() => (detail = t)}>
+                  <button class="open" onclick={() => open1(t.number)}>
                     <div class="top">
                       <span class="tnum mono">#{t.number}</span>
                       {#if t.priority === '緊急' || t.priority === '高'}
