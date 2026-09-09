@@ -259,19 +259,40 @@ func (e *Engine) numCtx(ctx context.Context, a *agent.Agent) int {
 }
 
 // modelContext はモデル自身が持つコンテキスト長を返す。分からなければ 0。
+//
+// 失敗も覚える。覚えないと、提供元が遅い相手のときに生成のたびに問い合わせ、
+// そのたび待ち時間を丸ごと積み上げる。1 ターンでツールを 20 往復すれば、
+// 待つだけで 100 秒になる。接続も無駄に増える。
+//
+// ただし覚える時間は短くする。落ちていた相手が戻ったときに、いつまでも
+// 「分からない」を返し続けないため。
 func (e *Engine) modelContext(ctx context.Context, model string) int {
 	if v, ok := e.ctxLen.Load(model); ok {
-		return v.(int)
+		known := v.(ctxLenEntry)
+		if known.n > 0 || time.Since(known.at) < ctxLenRetry {
+			return known.n
+		}
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	n, err := e.Provider.ContextLength(ctx, model)
 	if err != nil {
+		e.ctxLen.Store(model, ctxLenEntry{n: 0, at: time.Now()})
 		return 0
 	}
-	e.ctxLen.Store(model, n)
+	e.ctxLen.Store(model, ctxLenEntry{n: n, at: time.Now()})
 	return n
 }
+
+// ctxLenEntry は問い合わせた結果と、いつ問い合わせたか。分からなかったことも
+// 結果として覚えるので、時刻が要る。
+type ctxLenEntry struct {
+	n  int
+	at time.Time
+}
+
+// ctxLenRetry は「分からなかった」を覚えておく長さ。
+const ctxLenRetry = 2 * time.Minute
 
 // numOption は設定から数値を取り出す。JSON から来ると float64 に、
 // 画面や試験から来ると int になるため、どちらも受ける。

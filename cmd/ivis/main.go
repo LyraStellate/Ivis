@@ -68,6 +68,7 @@ func run() error {
 	newProvider := func(baseURL string) provider.Provider {
 		c := ollama.New(baseURL)
 		c.SetIdle(time.Duration(cfg.IdleTimeoutSec) * time.Second)
+		c.SetProbe(time.Duration(cfg.ProbeTimeoutSec) * time.Second)
 		return c
 	}
 

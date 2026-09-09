@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -22,6 +23,8 @@ type Client struct {
 	http    *http.Client
 	// idle は何も届かないまま待つ上限。
 	idle time.Duration
+	// probe は生きているかを尋ねる要求の待ち時間。生成とは別に持つ。
+	probe time.Duration
 }
 
 // New は指定した接続先の Client を返す。
@@ -38,12 +41,47 @@ type Client struct {
 // 5 分にしてあるのは、大きなモデルの読み込みがそこまで伸びうるためである。
 const DefaultIdle = 5 * time.Minute
 
+// DefaultProbe は、生きているかを尋ねる要求の待ち時間。
+//
+// 生成と違って、これは待っても意味が変わらない要求である。ただし短すぎると、
+// 別の端末の Ollama を VPN 越しに使っているときに、動いている相手を落ちて
+// いると判じてしまう。3 秒では足りなかった。
+const DefaultProbe = 10 * time.Second
+
 func New(baseURL string) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		// 生成は長く続きうるので全体のタイムアウトは置かない。中断は ctx で行う。
-		http: &http.Client{},
-		idle: DefaultIdle,
+		http:  &http.Client{Transport: transport()},
+		idle:  DefaultIdle,
+		probe: DefaultProbe,
+	}
+}
+
+// transport は接続の使い回し方を決める。
+//
+// 既定の設定のままだと、使い回す接続を長く抱えたままにする。VPN が切れると
+// その接続は黙って死に、こちらはそれを知らないまま次の要求で掴んで失敗する。
+// 「モデル提供元に接続できません」が続けて出るのはこれである。
+//
+// 抱える時間を短くして、死んだ接続を掴む窓を狭める。使い回しをやめないのは、
+// 1 ターンの中で何度も往復するためで、毎回繋ぎ直すほうが遅い。
+func transport() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.IdleConnTimeout = 30 * time.Second
+	t.MaxIdleConnsPerHost = 4
+	// 相手が生きているかを、繋いだあとも定期的に確かめる。
+	t.DialContext = (&net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 15 * time.Second,
+	}).DialContext
+	return t
+}
+
+// SetProbe は生きているかを尋ねる要求の待ち時間を変える。
+func (c *Client) SetProbe(d time.Duration) {
+	if d > 0 {
+		c.probe = d
 	}
 }
 
@@ -188,6 +226,22 @@ func (c *Client) post(ctx context.Context, body chatRequest) (*http.Response, er
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.http.Do(httpReq)
+	if err != nil && ctx.Err() == nil {
+		// 使い回している接続が VPN の切断で死んでいることがある。死んだことは
+		// こちらに伝わらないので、掴んでから分かる。要求は本文を読み直せる
+		// (GetBody を持つ) ので、1 度だけ繋ぎ直して送り直す。
+		//
+		// やり直すのは繋ぐ段階の失敗だけである。相手が受け取ったあとの失敗を
+		// やり直すと、同じ生成が 2 度走る。
+		httpReq, err = http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/chat",
+			bytes.NewReader(buf))
+		if err != nil {
+			return nil, err
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		c.http.CloseIdleConnections()
+		resp, err = c.http.Do(httpReq)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%w (%s): %v", provider.ErrUnavailable, c.baseURL, err)
 	}
@@ -372,7 +426,7 @@ func (c *Client) Models(ctx context.Context) ([]provider.Model, error) {
 
 // Health は Ollama に到達できるかを確かめる。
 func (c *Client) Health(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, c.probe)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/version", nil)
@@ -428,6 +482,11 @@ type showResponse struct {
 
 // ContextLength はモデルが持つコンテキスト長を返す。分からなければ 0 を返す。
 // 分母が無いときに割合を出すと嘘になるので、呼び出し側はそれを見て諦める。
+// probeCtx は、待っても意味の変わらない要求に待ち時間を掛ける。
+func (c *Client) probeCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, c.probe)
+}
+
 func (c *Client) ContextLength(ctx context.Context, model string) (int, error) {
 	body, err := json.Marshal(map[string]string{"model": model})
 	if err != nil {

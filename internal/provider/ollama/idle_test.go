@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -129,5 +131,80 @@ func TestSlowButAliveStreamIsNotCut(t *testing.T) {
 	}
 	if text != "ああああああ" {
 		t.Errorf("本文 = %q", text)
+	}
+}
+
+// 使い回している接続が VPN の切断で死ぬことがある。死んだことはこちらに
+// 伝わらないので、掴んでから分かる。1 度だけ繋ぎ直して送り直す。
+func TestStaleConnectionIsRetriedOnce(t *testing.T) {
+	var conns, requests int32
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		if atomic.AddInt32(&requests, 1) == 1 {
+			// 1 本目は応答を書かずに切る。死んだ接続を掴んだのと同じ形。
+			if hj, ok := w.(http.Hijacker); ok {
+				c, _, err := hj.Hijack()
+				if err == nil {
+					c.Close()
+					return
+				}
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		io.WriteString(w, `{"message":{"role":"assistant","content":"はい"},"done":true}`+"\n")
+	}))
+	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			atomic.AddInt32(&conns, 1)
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+
+	c := New(srv.URL)
+	stream, err := c.Chat(context.Background(), provider.Request{Model: "m"})
+	if err != nil {
+		t.Fatalf("やり直しても繋がらない: %v", err)
+	}
+	var text string
+	for ev := range stream {
+		if ev.Type == provider.EventError {
+			t.Fatalf("やり直しが効いていない: %v", ev.Err)
+		}
+		if ev.Type == provider.EventDelta {
+			text += ev.Text
+		}
+	}
+	if text != "はい" {
+		t.Errorf("本文 = %q", text)
+	}
+	if n := atomic.LoadInt32(&requests); n != 2 {
+		t.Errorf("要求の数 = %d, want 2 (1 度だけやり直す)", n)
+	}
+	if n := atomic.LoadInt32(&conns); n < 2 {
+		t.Errorf("繋ぎ直していない: 接続 = %d", n)
+	}
+}
+
+// 利用者が止めたときはやり直さない。止めたのは本人である。
+func TestAbortIsNotRetried(t *testing.T) {
+	var requests int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		time.Sleep(2 * time.Second)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+	if _, err := New(srv.URL).Chat(ctx, provider.Request{Model: "m"}); err == nil {
+		t.Fatal("中断したのに繋がった")
+	}
+	if n := atomic.LoadInt32(&requests); n != 1 {
+		t.Errorf("要求の数 = %d, want 1 (中断はやり直さない)", n)
 	}
 }
