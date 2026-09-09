@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -106,6 +107,11 @@ func (e *Engine) loop(ctx context.Context, rc *runCtx) (string, error) {
 	opts := e.options(ctx, rc.agent)
 
 	var last string
+	// 直前の呼び出しと、それが続いた回数。回数ではなく同一性で堂々巡りを
+	// 見分けるために持つ。
+	var lastCall string
+	repeats := 1
+
 	for iter := 0; iter < e.Cfg.MaxIterations; iter++ {
 		req := provider.Request{
 			Model:    rc.agent.Model,
@@ -126,16 +132,67 @@ func (e *Engine) loop(ctx context.Context, rc *runCtx) (string, error) {
 		if len(calls) == 0 {
 			return last, nil
 		}
+
+		// 同じ手を繰り返しているなら止める。回数で切ると、正しく進んで
+		// いる長い作業まで途中で止まる。止めるべきなのは進んでいない
+		// ときだけである。
+		if sig := callSignature(calls); sig == lastCall {
+			repeats++
+			if repeats >= e.Cfg.MaxRepeats {
+				msg := fmt.Sprintf(
+					"同じツールの呼び出しを %d 回続けたため打ち切りました: %s。"+
+						"同じ引数で呼び直しても結果は変わりません。別の手を試してください。",
+					repeats, describeCalls(calls))
+				rc.emit(Event{Type: EvtError, Depth: rc.depth, AgentID: rc.agent.ID, Error: msg})
+				return last, reported(errors.New(msg))
+			}
+		} else {
+			lastCall = sig
+			repeats = 1
+		}
+
 		if err := e.runToolCalls(ctx, rc, msgID, calls); err != nil {
 			return last, err
 		}
 	}
 
-	// ローカルモデルは同じツールを呼び続けるループに入ることがある。
-	// 打ち切ったうえで、理由を利用者に示す。
+	// 安全網。ここまで来るのは、毎回違う手を出しながら終わらない場合である。
 	msg := fmt.Sprintf("ツール呼び出しが %d 回に達したため打ち切りました。", e.Cfg.MaxIterations)
 	rc.emit(Event{Type: EvtError, Depth: rc.depth, AgentID: rc.agent.ID, Error: msg})
 	return last, reported(errors.New(msg))
+}
+
+// callSignature は 1 回の生成が要求したツール呼び出しを 1 つの文字列にする。
+//
+// 引数は map なので、そのままでは比べられない。JSON にすると Go はキーを
+// 名前順に並べるので、中身が同じなら同じ文字列になる。呼び出し ID は
+// 生成ごとに振り直されるため含めない。
+func callSignature(calls []provider.ToolCall) string {
+	var b strings.Builder
+	for _, c := range calls {
+		b.WriteString(c.Name)
+		b.WriteByte('\x00')
+		if raw, err := json.Marshal(c.Arguments); err == nil {
+			b.Write(raw)
+		}
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// describeCalls は打ち切りの理由に載せる、人が読める形。何をどんな引数で
+// 繰り返したのかが分からないと、次に何を直せばよいかも分からない。
+func describeCalls(calls []provider.ToolCall) string {
+	var out []string
+	for _, c := range calls {
+		raw, err := json.Marshal(c.Arguments)
+		if err != nil {
+			out = append(out, c.Name)
+			continue
+		}
+		out = append(out, c.Name+" "+oneLine(string(raw), 120))
+	}
+	return strings.Join(out, " / ")
 }
 
 // options はモデルへ渡す生成パラメータを組み立てる。

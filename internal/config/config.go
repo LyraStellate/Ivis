@@ -33,9 +33,16 @@ type Config struct {
 	// WorkspaceDir はツールがファイルを読み書きしてよい境界。この外へは出さない。
 	WorkspaceDir string `json:"workspace_dir"`
 
-	// MaxIterations は 1 ターン内のツール呼び出し反復の上限。ローカルモデルは
-	// 同じツールを呼び続けることがあり、これがないとターンが終わらない。
+	// MaxIterations は 1 ターン内のツール呼び出し反復の上限。
+	//
+	// これは安全網であって、堂々巡りを止める仕掛けではない。止めるのは
+	// MaxRepeats のほうで、そちらは「同じ手を繰り返しているか」を見る。
+	// 回数で切ると、正しく進んでいる長い作業まで途中で止まる。
 	MaxIterations int `json:"max_iterations"`
+	// MaxRepeats は、名前も引数もまったく同じツール呼び出しが続いてよい
+	// 回数。ローカルモデルは同じ手を繰り返す癖があり、それは回数ではなく
+	// 同一性で見分けられる。
+	MaxRepeats int `json:"max_repeats"`
 	// MaxDelegationDepth は委譲の深さの上限。
 	MaxDelegationDepth int `json:"max_delegation_depth"`
 	// MaxTurns はチームセッションの 1 ラウンドで回す手番の上限。互いに
@@ -58,6 +65,12 @@ type Config struct {
 	// なく、通路が死んでいる間に伸びる。別の端末の Ollama を VPN 越しに
 	// 使うと通路は黙って落ち、落ちたことはどちらの側にも伝わらない。
 	IdleTimeoutSec int `json:"idle_timeout_sec"`
+	// ProbeTimeoutSec は、生きているかを尋ねる要求の待ち時間 (秒)。
+	//
+	// 生成の待ち時間とは別に持つ。あちらは長く待ってよいが、こちらは短い
+	// ほうがよい。ただし短すぎると、別の端末の Ollama を VPN 越しに使って
+	// いるときに、動いている相手を落ちていると判じてしまう。
+	ProbeTimeoutSec int `json:"probe_timeout_sec"`
 	// RequireApproval が false のとき、承認を必要とするツールを確認なしで実行する。
 	RequireApproval bool `json:"require_approval"`
 	// AutoApprove に載せたツールは、既定で確認を求めるものであっても
@@ -111,13 +124,15 @@ func Default() *Config {
 		SkillPaths:         []string{filepath.Join(home, ".ivis", "skills")},
 		DataDir:            filepath.Join(home, ".ivis"),
 		WorkspaceDir:       filepath.Join(home, ".ivis", "workspace"),
-		MaxIterations:      40,
+		MaxIterations:      200,
+		MaxRepeats:         3,
 		MaxDelegationDepth: 3,
 		MaxTurns:           24,
 		ContextTokens:      16384,
 		ScriptTimeoutSec:   120,
 		CommandTimeoutSec:  120,
 		IdleTimeoutSec:     300,
+		ProbeTimeoutSec:    10,
 		AutoApprove:        []string{},
 		SearchBackend:      websearch.Backends[0],
 		RequireApproval:    true,
@@ -266,6 +281,9 @@ func (c *Config) normalize() {
 	if c.MaxIterations <= 0 {
 		c.MaxIterations = d.MaxIterations
 	}
+	if c.MaxRepeats <= 0 {
+		c.MaxRepeats = d.MaxRepeats
+	}
 	if c.MaxDelegationDepth <= 0 {
 		c.MaxDelegationDepth = d.MaxDelegationDepth
 	}
@@ -283,6 +301,9 @@ func (c *Config) normalize() {
 	}
 	if c.IdleTimeoutSec == 0 {
 		c.IdleTimeoutSec = d.IdleTimeoutSec
+	}
+	if c.ProbeTimeoutSec <= 0 {
+		c.ProbeTimeoutSec = d.ProbeTimeoutSec
 	}
 	if c.CommandTimeoutSec <= 0 {
 		c.CommandTimeoutSec = d.CommandTimeoutSec

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -98,14 +99,61 @@ func TestToolLoopExecutesAndContinues(t *testing.T) {
 	}
 }
 
-// ローカルモデルは同じツールを呼び続けることがある。打ち切れることを確かめる。
-func TestIterationCapStopsRunawayLoop(t *testing.T) {
+// ローカルモデルは同じ手を繰り返す癖がある。止めるのは回数ではなく同一性で
+// 見分ける — 回数で切ると、正しく進んでいる長い作業まで途中で止まる。
+func TestSameCallStopsTheLoop(t *testing.T) {
 	f := newFixture(t, func(n int, req provider.Request) []provider.Event {
 		return []provider.Event{callTool("list_dir", map[string]any{"path": "."})}
 	})
+	f.cfg.MaxRepeats = 3
 	id := f.newSession(t, "main")
 
 	err := f.eng.Run(context.Background(), id, "繰り返して", f.emit)
+	if err == nil {
+		t.Fatal("繰り返しても打ち切られませんでした")
+	}
+	if f.mock.calls != 3 {
+		t.Errorf("生成回数 = %d, want 3 (MaxRepeats)", f.mock.calls)
+	}
+	// 何をどんな引数で繰り返したのかが読めること。読めないと、次に何を
+	// 直せばよいかも分からない。
+	for _, want := range []string{"同じツール", "list_dir", "path"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("理由に %q がありません: %v", want, err)
+		}
+	}
+}
+
+// 引数が違えば続く。同じツールでも、違うものを見に行っているなら進んでいる。
+func TestDifferentArgumentsKeepGoing(t *testing.T) {
+	f := newFixture(t, func(n int, req provider.Request) []provider.Event {
+		if n < 3 {
+			return []provider.Event{callTool("list_dir",
+				map[string]any{"path": fmt.Sprintf("dir%d", n)})}
+		}
+		return []provider.Event{text("見終わりました"), {Type: provider.EventDone}}
+	})
+	f.cfg.MaxRepeats = 3
+	id := f.newSession(t, "main")
+
+	if err := f.eng.Run(context.Background(), id, "順に見て", f.emit); err != nil {
+		t.Fatalf("引数が違うのに打ち切られました: %v", err)
+	}
+	if f.mock.calls != 4 {
+		t.Errorf("生成回数 = %d, want 4", f.mock.calls)
+	}
+}
+
+// 毎回違う手を出しながら終わらない場合の安全網。
+func TestIterationCapIsTheLastResort(t *testing.T) {
+	f := newFixture(t, func(n int, req provider.Request) []provider.Event {
+		return []provider.Event{callTool("list_dir",
+			map[string]any{"path": fmt.Sprintf("dir%d", n)})}
+	})
+	f.cfg.MaxRepeats = 3
+	id := f.newSession(t, "main")
+
+	err := f.eng.Run(context.Background(), id, "延々と", f.emit)
 	if err == nil {
 		t.Fatal("上限に達しても打ち切られませんでした")
 	}
