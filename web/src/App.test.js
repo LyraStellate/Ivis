@@ -20,6 +20,9 @@ const sessions = [
   { id: 's9', title: '走っている会話', agent_id: 'general', workspace: '/w/s9',
     running: true, context_tokens: 0, context_limit: 0,
     created_at: '2026-09-04T07:00:00Z', updated_at: '2026-09-04T07:00:00Z' },
+  { id: 't1', title: 'チームの会話', agent_id: 'painter', workspace: '/w/t1',
+    kind: 'team', members: ['painter'], context_tokens: 0, context_limit: 0,
+    created_at: '2026-09-04T06:00:00Z', updated_at: '2026-09-04T06:00:00Z' },
 ]
 
 const messages = {
@@ -29,6 +32,7 @@ const messages = {
          content: 'にの発言', agent_id: 'general', created_at: '2026-09-04T08:00:00Z' }],
   s9: [{ id: 'm3', session_id: 's9', parent_id: '', seq: 1, role: 'user',
          content: 'さんの依頼', agent_id: 'general', created_at: '2026-09-04T07:00:00Z' }],
+  t1: [],
 }
 
 vi.mock('./lib/api.js', () => ({
@@ -78,7 +82,13 @@ vi.mock('./lib/api.js', () => ({
     await new Promise((r) => setTimeout(r, 5000))
   }),
   listTickets: vi.fn(async () => []),
-  getRoster: vi.fn(async () => ({ members: [], available: [], lead_id: '', errors: [] })),
+  getRoster: vi.fn(async () => ({
+    // 色を選んである固有のメンバー。共通の一覧には居ない。
+    members: [{ id: 'painter', name: 'Painter', tier: 1, local: true, color: 'rose' }],
+    available: [],
+    lead_id: 'painter',
+    errors: [],
+  })),
 }))
 
 const { default: App } = await import('./App.svelte')
@@ -104,7 +114,7 @@ describe('会話の切り替え', () => {
     await settle()
 
     const rows = [...target.querySelectorAll('button.open')]
-    expect(rows.length).toBe(3)
+    expect(rows.length).toBe(4)
 
     rows[0].click()
     await settle()
@@ -172,7 +182,7 @@ describe('生成中の操作', () => {
     await settle()
 
     // 作っただけで開けないと、会話だけが増えていく。
-    expect(target.querySelectorAll('button.open').length).toBe(4)
+    expect(target.querySelectorAll('button.open').length).toBe(5)
     expect(target.textContent).not.toContain('いちの発言')
     expect(target.textContent).not.toContain('生成中')
 

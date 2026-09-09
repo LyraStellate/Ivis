@@ -18,6 +18,25 @@ export function whoColor(agentId, colorOf) {
   return 'var(--who-' + COLORS[slot(agentId)] + ')'
 }
 
+/**
+ * 定義で選ばれた色を、渡された一覧から順に探す。見つからなければ空。
+ *
+ * 一覧を複数受けるのは、話し手が 1 つの一覧に居るとは限らないためである。
+ * チームのメンバーは共通のエージェント一覧に居ないので、そこだけを見ると
+ * 定義で色を選んでも常に ID から決まる自動色になる。
+ *
+ * @param id 話し手
+ * @param lists {id, color} を持つものの一覧。先に渡したものを優先する。
+ */
+export function chooseColor(id, ...lists) {
+  if (!id) return ''
+  for (const list of lists) {
+    const hit = list?.find((a) => a.id === id)
+    if (hit?.color) return hit.color
+  }
+  return ''
+}
+
 /** 利用者は色を持たない。人は常駐の話し手ではないため。 */
 export const USER_COLOR = 'var(--fg-bright)'
 

@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import * as api from './lib/api.js'
   import { Transcript } from './lib/conversation.js'
+  import { chooseColor } from './lib/who.js'
   import Sidebar from './lib/Sidebar.svelte'
   import ChatView from './lib/ChatView.svelte'
   import SettingsPanel from './lib/SettingsPanel.svelte'
@@ -96,7 +97,10 @@
 
   // 発言の色は定義で選ばれていればそれを使う。定義を画面の各所へ配るのでは
   // なく、ID から色名を引く関数を 1 つ渡す。
-  const colorOf = $derived((id) => agents.find((a) => a.id === id)?.color ?? '')
+  //
+  // 名簿のメンバーも引く。チームのメンバーは共通の一覧に居ないので、共通
+  // だけを見ていると、定義で色を選んでも常に ID から決まる自動色になる。
+  const colorOf = $derived((id) => chooseColor(id, agents, members))
 
   async function guard(fn) {
     try {
