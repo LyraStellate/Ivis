@@ -1,12 +1,15 @@
 // Package team はチームセッションの名簿を組み立てる。
 //
-// 名簿は 2 つの由来を持つ 1 つの一覧である。参加している共通エージェント
-// (定義は config.AgentPaths にあり、直せば参加している全てのチームに効く) と、
-// そのセッションのためだけに作られた固有エージェント (定義はセッションの下に
-// あり、会話が消えれば一緒に消える) である。
+// エージェントの定義は 2 か所にある。共通エージェント (config.AgentPaths) は
+// すべての会話で使え、チームエージェント (その下の team/) はチームセッション
+// でだけ使える。どちらも定義は 1 つきりで、**全ての会話が同じものを見る**。
 //
-// 名簿の中では両者を区別しない。誰に何を頼めるかは Tier だけで決まり、定義が
-// どこにあるかは関係しないためである (#731906)。
+// 会話ごとに違うのは「どれを有効にしてあるか」だけで、それは Session.Members
+// が持つ。名簿はそこに載っている ID を 2 つの一覧から引いて組み立てる。
+//
+// 名簿の中では由来を区別しない。誰に何を頼めるかは Tier だけで決まり、定義が
+// どこにあるかは関係しない。由来 (Scope) を持つのは、画面が欄を分けるため
+// だけである (#731906)。
 package team
 
 import (
@@ -14,7 +17,6 @@ import (
 	"strings"
 
 	"github.com/LyraStellate/Ivis/internal/agent"
-	"github.com/LyraStellate/Ivis/internal/config"
 	"github.com/LyraStellate/Ivis/internal/store"
 )
 
@@ -35,9 +37,6 @@ const (
 	DecisionAccept = "受諾"
 	DecisionReject = "却下"
 )
-
-// Anyone は宛先を決めずに送るときの印。窓口が受け取り、窓口が回す。
-const Anyone = "*"
 
 // ParseMention は本文の先頭から宛先を取り出し、残りを本文として返す。
 //
@@ -63,11 +62,19 @@ func ParseMention(text string) (to, body string) {
 	return to, strings.TrimSpace(rest[end:])
 }
 
+// エージェントの由来。画面が欄を分けるために持つ。
+const (
+	// ScopeCommon は共通エージェント。すべての会話で使える。
+	ScopeCommon = "common"
+	// ScopeTeam はチームエージェント。チームセッションでだけ使える。
+	ScopeTeam = "team"
+)
+
 // Member は名簿の 1 人。
 type Member struct {
 	*agent.Agent
-	// Local が真なら、このセッションのためだけに作られた定義である。
-	Local bool `json:"local"`
+	// Scope は定義がどちらの一覧から来たか。
+	Scope string `json:"scope"`
 }
 
 // Roster は 1 つのチームセッションの名簿。
@@ -75,49 +82,41 @@ type Roster struct {
 	// Members は Tier 順、同じ Tier では ID 順。上位から下位へ読める並びは、
 	// そのまま指示の流れの向きである。
 	Members []*Member
-	// LeadID は窓口。宛先の書かれていない発言と "*" はここへ届く。
-	LeadID string
-	// Errors は読めなかった定義。1 体壊れても残りは名簿に載る。
+	// Errors は読めなかった定義。1 体欠けても残りは名簿に載る。
 	Errors []agent.LoadError
 }
 
 // Load は会話の名簿を組み立てる。
 //
-// 固有の定義を先に読み、共通は参加しているものだけを後から足す。ID が衝突
-// したときに固有を残すのは、その会話のために意図して作られたものだから
-// である。衝突は失敗として記録し、黙って片方を消さない。
-func Load(cfg *config.Config, set *agent.Set, sess *store.Session) *Roster {
-	r := &Roster{LeadID: sess.AgentID}
+// 有効にしてある ID を、共通 → チームの順に引く。ファイルは読まない —
+// 定義はどちらの Set にも読み込み済みで、会話ごとに違うのは「どれを有効に
+// してあるか」だけである。
+//
+// 共通を先に見るのは、探索パスの「先に書いたものが先勝ち」と同じ向きである。
+// ID は共通とチームを通して一意に保たれる (作るときに断る) ので、この順序が
+// 効くのは手でファイルを置いたときだけになる。
+func Load(set, teamSet *agent.Set, sess *store.Session) *Roster {
+	r := &Roster{}
 	seen := map[string]bool{}
-
-	locals, errs := agent.ReadDir(cfg.SessionAgentsDir(sess.ID))
-	r.Errors = append(r.Errors, errs...)
-	for _, a := range locals {
-		if seen[a.ID] {
-			r.Errors = append(r.Errors, agent.LoadError{Path: a.File,
-				Reason: fmt.Sprintf("エージェント ID %q がこの会話の中で重複しています", a.ID)})
-			continue
-		}
-		seen[a.ID] = true
-		r.Members = append(r.Members, &Member{Agent: a, Local: true})
-	}
 
 	for _, id := range sess.Members {
 		if seen[id] {
-			// 固有の定義が同じ名前を取っている。会話の中で宛先が一意に
-			// 決まらなくなるので、参加している側を載せない。
-			r.Errors = append(r.Errors, agent.LoadError{Path: id,
-				Reason: fmt.Sprintf("共通エージェント %q は、この会話の固有エージェントと名前が重なっています", id)})
-			continue
-		}
-		a, ok := set.Get(id)
-		if !ok {
-			r.Errors = append(r.Errors, agent.LoadError{Path: id,
-				Reason: fmt.Sprintf("参加している共通エージェント %q の定義が見つかりません", id)})
 			continue
 		}
 		seen[id] = true
-		r.Members = append(r.Members, &Member{Agent: a})
+
+		if a, ok := set.Get(id); ok {
+			r.Members = append(r.Members, &Member{Agent: a, Scope: ScopeCommon})
+			continue
+		}
+		if a, ok := teamSet.Get(id); ok {
+			r.Members = append(r.Members, &Member{Agent: a, Scope: ScopeTeam})
+			continue
+		}
+		// 定義が消えた相手は名簿から落ちる。黙って人数を減らさず、何が
+		// 欠けたのかを出す。#528664 の「開けるが続行できない」と同じ扱い。
+		r.Errors = append(r.Errors, agent.LoadError{Path: id,
+			Reason: fmt.Sprintf("有効にしているエージェント %q の定義が見つかりません", id)})
 	}
 
 	sortMembers(r.Members)
@@ -151,9 +150,6 @@ func (r *Roster) Get(id string) (*Member, bool) {
 	}
 	return nil, false
 }
-
-// Lead は窓口を返す。定義が外れていれば見つからない。
-func (r *Roster) Lead() (*Member, bool) { return r.Get(r.LeadID) }
 
 // IDs は名簿の ID を並び順に返す。
 func (r *Roster) IDs() []string {
@@ -207,9 +203,10 @@ func (r *Roster) Roll(self string) string {
 		fmt.Fprintf(&b, "- %s (Tier %d, %s): %s ができます。%s\n",
 			m.ID, m.Tier, m.Name, relation(me.Tier, m.Tier), describe(m.Agent))
 	}
-	if r.LeadID != "" {
-		fmt.Fprintf(&b, "窓口は %s です。宛先の書かれていない依頼はそこへ届きます。\n", r.LeadID)
-	}
+	// 宛先の行き先を書いておく。書かないと、モデルは「まず窓口へ回します」の
+	// ような、もう存在しない段取りを自分で補って書き始める。
+	b.WriteString("利用者は宛先を名指しして送ります。あなたに届いた依頼は、" +
+		"あなたに宛てられたものです。\n")
 	return b.String()
 }
 
@@ -235,18 +232,32 @@ func (r *Roster) Subordinates(self string) []*Member {
 	return out
 }
 
+// Superiors は自分より上位のメンバーを返す。
+func (r *Roster) Superiors(self string) []*Member {
+	me, ok := r.Get(self)
+	if !ok {
+		return nil
+	}
+	var out []*Member
+	for _, m := range r.Members {
+		if m.Tier < me.Tier {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
 // Guide はチームでの進め方。立場によって書き分ける。
 //
 // 全員に同じ文を渡すと、下位を持つ相手まで「勝手に始めない」「確認を取る」と
 // 読み、部下に許可を求め始める。Tier は指示できる範囲を表すのだから、指示を
 // 出す側と受ける側では、進め方の指示そのものが違っていなければならない。
 func Guide(r *Roster, self string) string {
-	me, ok := r.Get(self)
-	if !ok {
+	if _, ok := r.Get(self); !ok {
 		return ""
 	}
 	under := r.Subordinates(self)
-	isLead := self == r.LeadID
+	over := r.Superiors(self)
 
 	var b strings.Builder
 	b.WriteString("\nチームでの進め方:\n")
@@ -277,13 +288,11 @@ func Guide(r *Roster, self string) string {
 		b.WriteString("- 指示は断れません。やり方に問題があるなら、やったうえで報告に書いてください。\n")
 	}
 
-	if isLead {
-		b.WriteString("\nあなたはこの会話の窓口です。\n")
-		b.WriteString("- 利用者の依頼はまずあなたに届きます。全体をどう進めるかを決めるのはあなたです。\n")
-		b.WriteString("- 宛先が決められないときは \"*\" を指定できますが、それは「決められなかった」記録として残り、\n")
-		b.WriteString("  そこで話が止まります。できるかぎり相手を名指ししてください。\n")
-	} else if me.Tier > 0 {
-		fmt.Fprintf(&b, "\nこの会話の窓口は %s です。全体の判断はそちらにあります。\n", r.LeadID)
+	// 上に誰も居ない人だけが、全体をどう進めるかを決められる。窓口という
+	// 指名から出る性質ではなく、Tier の位置から出る性質である。
+	if len(over) == 0 {
+		b.WriteString("\nあなたより上位のメンバーは居ません。\n")
+		b.WriteString("- 利用者はあなたに直接依頼します。全体をどう進めるかを決めるのはあなたです。\n")
 	}
 	return b.String()
 }

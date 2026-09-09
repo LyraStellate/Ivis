@@ -26,13 +26,14 @@ type agentBody struct {
 	Options      map[string]any `json:"options"`
 }
 
-// into は受け取った内容を定義へ写す。local が真ならセッション固有の定義で、
-// 規定エージェントの決まりは持ち込まない。
+// into は受け取った内容を定義へ写す。
 func (b *agentBody) into(a *agent.Agent) { b.write(a, false) }
 
-func (b *agentBody) intoLocal(a *agent.Agent) { b.write(a, true) }
+// intoTeam はチームエージェントとして写す。規定エージェントの決まり
+// (Tier 0 で固定) は持ち込まない。チームには規定エージェントが居ない。
+func (b *agentBody) intoTeam(a *agent.Agent) { b.write(a, true) }
 
-func (b *agentBody) write(a *agent.Agent, local bool) {
+func (b *agentBody) write(a *agent.Agent, team bool) {
 	a.Name = b.Name
 	a.Description = b.Description
 	a.Model = b.Model
@@ -48,7 +49,7 @@ func (b *agentBody) write(a *agent.Agent, local bool) {
 	// 規定エージェントの Tier は変えられない。入口が 2 つある状態にも、
 	// 入口が 1 つも無い状態にもしないため。会話の中の同名は別物なので、
 	// そこには効かせない。
-	if !local && a.ID == agent.DefaultID {
+	if !team && a.ID == agent.DefaultID {
 		a.Tier = 0
 	}
 }
@@ -156,6 +157,7 @@ func (s *Server) agentDir() string {
 func (s *Server) reloadAgents() {
 	agent.Bootstrap(s.cfg.AgentPaths)
 	s.agents.Load(s.cfg.AgentPaths)
+	s.reloadTeamAgents()
 }
 
 func (s *Server) writeAgent(w http.ResponseWriter, id string) {

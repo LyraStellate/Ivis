@@ -53,18 +53,22 @@ func newServer(t *testing.T) (*Server, *stubProvider, *store.Store) {
 	}
 	t.Cleanup(func() { st.Close() })
 
-	agents := agent.NewSet()
-	agents.Load([]string{agentsDir})
 	cfg := config.Default()
 	cfg.DataDir = root
 	cfg.WorkspaceDir = filepath.Join(root, "workspace")
 	cfg.AgentPaths = []string{agentsDir}
 	cfg.Discord.Enabled = false
 
+	agents := agent.NewSet()
+	agents.Load(cfg.AgentPaths)
+	teamAgents := agent.NewSet()
+	teamAgents.LoadTeam(cfg.TeamAgentPaths())
+
 	prov := &stubProvider{}
 	s := New(Deps{
-		Config: cfg, Store: st, Agents: agents, Skills: skillreg.New(),
-		Tools: tools.NewRegistry(), Prov: prov,
+		Config: cfg, Store: st, Agents: agents, TeamAgents: teamAgents,
+		Skills: skillreg.New(),
+		Tools:  tools.NewRegistry(), Prov: prov,
 		NewProvider: func(string) provider.Provider { return prov },
 		Log:         func(string, ...any) {},
 	})

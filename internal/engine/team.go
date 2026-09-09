@@ -43,7 +43,7 @@ const AutoNote = "(自動)"
 
 // runTeam はチームセッションの 1 ラウンドを回す。
 func (e *Engine) runTeam(ctx context.Context, sess *store.Session, userText string, emit Emit) error {
-	roster := team.Load(e.Cfg, e.Agents, sess)
+	roster := team.Load(e.Agents, e.TeamAgents, sess)
 	for _, le := range roster.Errors {
 		// 1 体読めなくてもラウンドは回す。誰が欠けているかだけは伝える。
 		emit(Event{Type: EvtNotice, Text: le.Reason})
@@ -51,18 +51,23 @@ func (e *Engine) runTeam(ctx context.Context, sess *store.Session, userText stri
 	if len(roster.Members) == 0 {
 		return fmt.Errorf("この会話にはメンバーが 1 人も居ません。右のパネルから足してください")
 	}
-	if _, ok := roster.Lead(); !ok {
-		return fmt.Errorf("窓口 %q がこの会話に居ません。窓口を選び直してください", roster.LeadID)
-	}
 
 	to, body := team.ParseMention(userText)
-	if to == "" || to == team.Anyone {
-		// 宛先の無い依頼と "*" は窓口へ届く。宛先を決める判断は、名簿を
-		// 持っている窓口が行う。
-		to = roster.LeadID
-	} else if _, ok := roster.Get(to); !ok {
-		return fmt.Errorf("%q はこの会話に居ません。居るのは %s です",
-			to, strings.Join(roster.IDs(), ", "))
+	switch {
+	case to != "":
+		if _, ok := roster.Get(to); !ok {
+			return fmt.Errorf("%q はこの会話に居ません。居るのは %s です",
+				to, strings.Join(roster.IDs(), ", "))
+		}
+	case len(roster.Members) == 1:
+		// 迷う余地が無い。1 人しか居ないのに宛先を書かせる理由は無い。
+		to = roster.Members[0].ID
+	default:
+		// ここで誰かを選ぶと、それは窓口を別の名前で復活させたことになる。
+		// 断る位置は、発言を保存する前でなければならない — 保存してから
+		// 断ると、宛先の無い発言が履歴に溜まる。
+		return fmt.Errorf("%w。誰に頼むかを @ で指定してください。この会話に居るのは %s です",
+			ErrNoAddressee, strings.Join(roster.IDs(), ", "))
 	}
 
 	userMsg := &store.Message{
@@ -104,7 +109,7 @@ func (e *Engine) runTeam(ctx context.Context, sess *store.Session, userText stri
 		if cur, err := e.Store.GetSession(ctx, sess.ID); err == nil {
 			sess = cur
 		}
-		roster = team.Load(e.Cfg, e.Agents, sess)
+		roster = team.Load(e.Agents, e.TeamAgents, sess)
 		m, ok := roster.Get(t.To)
 		if !ok {
 			emit(Event{Type: EvtNotice, Text: fmt.Sprintf(
@@ -239,9 +244,7 @@ func (e *Engine) runTurn(ctx context.Context, sess *store.Session, roster *team.
 		if err != nil {
 			return err
 		}
-		if msg.To != team.Anyone {
-			sent = append(sent, saved)
-		}
+		sent = append(sent, saved)
 		return nil
 	}
 
@@ -368,10 +371,8 @@ func teamContext(rc *runCtx) *tools.TeamContext {
 	}
 	return &tools.TeamContext{
 		Self:        rc.agent.ID,
-		LeadID:      rc.roster.LeadID,
 		Members:     members,
 		RequesterID: rc.requester,
-		Anyone:      team.Anyone,
 		AcceptWord:  team.DecisionAccept,
 		RejectWord:  team.DecisionReject,
 		Send:        rc.send,

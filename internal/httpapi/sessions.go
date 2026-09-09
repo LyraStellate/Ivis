@@ -128,9 +128,8 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, statusFor(err), err)
 		return
 	}
-	// 固有のエージェントの定義も消す。その会話のために作られたもので、
-	// 会話が無くなれば読み手が居ない (#731906)。
-	s.removeSessionAgents(r.Context(), id)
+	// チームエージェントの定義には触れない。全てのチーム会話で共有されて
+	// いるので、1 つの会話を消したことで消してよいものではない (#731906)。
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -1,11 +1,9 @@
 package httpapi
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 
 	"github.com/LyraStellate/Ivis/internal/agent"
 	"github.com/LyraStellate/Ivis/internal/config"
@@ -13,32 +11,34 @@ import (
 	"github.com/LyraStellate/Ivis/internal/team"
 )
 
-// 名簿の読み書き (#731906)。
+// 名簿と、チームエージェントの定義 (#731906)。
 //
-// 共通の定義に対する操作 (agents.go) と入力の形は同じで、書き先だけが会話の
-// 下になる。検証も同じものを通す。エージェントであることに変わりはないので、
-// 別の形式や別の検証を持ち込まない。
+// 定義は共通と同じ形式・同じ検証で読み書きする。エージェントであることに
+// 変わりはないので、別の形式や別の検証を持ち込まない。
+//
+// **チームエージェントは全てのチーム会話で共有される。**だから定義を直す
+// 経路は会話 ID の下に置いていない。会話の下にあると、別の会話から同じ
+// ファイルを書けることが経路から読めず、「この会話のもの」を編集していると
+// 誤解させ続ける。会話の下に残すのは作成とコピーで、どちらも「定義を作る」と
+// 「この会話で有効にする」を 1 度に行う操作である。
 
-// memberBody は名簿の 1 人。共通か固有かを添える。画面はこれで欄を振り分ける。
+// memberBody は名簿の 1 人。由来を添える。画面はこれで欄を振り分ける。
 type memberBody struct {
 	*agent.Agent
-	Local bool `json:"local"`
-	Lead  bool `json:"lead"`
+	Scope string `json:"scope"`
 }
 
-// rosterBody は名簿の応答。参加していない共通エージェントも一緒に返す。
+// rosterBody は名簿の応答。有効にしてあるものと、まだのものを 1 度で返す。
 //
 // 2 回問い合わせる形にすると、片方だけ古い一覧を描く瞬間が生まれる。
 type rosterBody struct {
 	Members   []memberBody      `json:"members"`
-	Available []*agent.Agent    `json:"available"`
-	LeadID    string            `json:"lead_id"`
+	Available []memberBody      `json:"available"`
 	Errors    []agent.LoadError `json:"errors,omitempty"`
 }
 
 // ErrNotTeam は直列の会話にチームの操作を求めたこと。呼ぶ側の誤りなので、
-// 障害と同じ扱いにしない。まとめて 500 にすると、画面は直せる誤りと直せない
-// 故障を区別できない。
+// 障害と同じ扱いにしない。
 var ErrNotTeam = errors.New("この会話はチームセッションではありません")
 
 // teamSession は会話を引き、チームであることを確かめる。
@@ -63,51 +63,32 @@ func (s *Server) handleRoster(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) rosterOf(sess *store.Session) rosterBody {
-	roster := team.Load(s.cfg, s.agents, sess)
-	body := rosterBody{Members: []memberBody{}, Available: []*agent.Agent{},
-		LeadID: roster.LeadID, Errors: roster.Errors}
+	roster := team.Load(s.agents, s.teamAgents, sess)
+	body := rosterBody{Members: []memberBody{}, Available: []memberBody{}, Errors: roster.Errors}
 
-	in := map[string]bool{}
+	on := map[string]bool{}
 	for _, m := range roster.Members {
-		in[m.ID] = true
-		body.Members = append(body.Members,
-			memberBody{Agent: m.Agent, Local: m.Local, Lead: m.ID == roster.LeadID})
+		on[m.ID] = true
+		body.Members = append(body.Members, memberBody{Agent: m.Agent, Scope: m.Scope})
 	}
 	for _, a := range s.agents.List() {
-		if !in[a.ID] {
-			body.Available = append(body.Available, a)
+		if !on[a.ID] {
+			body.Available = append(body.Available, memberBody{Agent: a, Scope: team.ScopeCommon})
+		}
+	}
+	for _, a := range s.teamAgents.List() {
+		if !on[a.ID] {
+			body.Available = append(body.Available, memberBody{Agent: a, Scope: team.ScopeTeam})
 		}
 	}
 	return body
 }
 
-// canAnswer はその会話でそのエージェントを窓口 (直列なら答え手) にできるかを返す。
+// handleEnable はこの会話でエージェントを有効にする / 外す。
 //
-// チームでは名簿から引く。共通の一覧だけを見ると、この会話のために作った
-// 固有のエージェントを窓口にできない。窓口を移せなければ規定エージェントも
-// 外せず、名簿は general に縛られたままになる (#731906)。
-func (s *Server) canAnswer(r *http.Request, agentID string) error {
-	sess, err := s.st.GetSession(r.Context(), r.PathValue("id"))
-	if err != nil {
-		return err
-	}
-	if sess.Kind == config.KindTeam {
-		roster := team.Load(s.cfg, s.agents, sess)
-		if _, ok := roster.Get(agentID); !ok {
-			return &agent.FieldError{Field: "agent_id", Reason: fmt.Sprintf(
-				"%q はこの会話に居ません。先に名簿へ加えてください", agentID)}
-		}
-		return nil
-	}
-	if _, ok := s.agents.Get(agentID); !ok {
-		return &agent.FieldError{Field: "agent_id",
-			Reason: "エージェント " + agentID + " の定義が見つかりません"}
-	}
-	return nil
-}
-
-// handleJoin は共通エージェントの参加を切り替える。
-func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
+// 定義そのものには触れない。ここで変わるのは「この会話で使うかどうか」だけで、
+// それは会話に属する。
+func (s *Server) handleEnable(w http.ResponseWriter, r *http.Request) {
 	sess, err := s.teamSession(r)
 	if err != nil {
 		writeError(w, statusFor(err), err)
@@ -121,37 +102,46 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if _, ok := s.agents.Get(in.AgentID); !ok {
+	if _, ok := s.anyAgent(in.AgentID); !ok {
 		writeError(w, http.StatusBadRequest,
 			fmt.Errorf("エージェント %q の定義が見つかりません", in.AgentID))
 		return
 	}
-	// 窓口は外せない。外すなら先に窓口を移す。宛先の無い発言の行き先が
-	// 消えると、その会話は何も受け取れなくなる。
-	if !in.Join && in.AgentID == sess.AgentID {
-		writeError(w, http.StatusConflict,
-			errors.New("窓口は外せません。先に窓口を別のメンバーへ移してください"))
-		return
-	}
-
-	next := make([]string, 0, len(sess.Members)+1)
-	for _, id := range sess.Members {
-		if id != in.AgentID {
-			next = append(next, id)
-		}
-	}
-	if in.Join {
-		next = append(next, in.AgentID)
-	}
-	if err := s.st.SetMembers(r.Context(), sess.ID, next); err != nil {
+	if err := s.setEnabled(r, sess, in.AgentID, in.Join); err != nil {
 		writeError(w, statusFor(err), err)
 		return
 	}
 	s.writeRoster(w, r, sess.ID)
 }
 
-// handleCreateSessionAgent はこの会話だけのエージェントを作る。
-func (s *Server) handleCreateSessionAgent(w http.ResponseWriter, r *http.Request) {
+// setEnabled は名簿への出し入れ。有効にするときは末尾へ足す。
+func (s *Server) setEnabled(r *http.Request, sess *store.Session, id string, on bool) error {
+	next := make([]string, 0, len(sess.Members)+1)
+	for _, cur := range sess.Members {
+		if cur != id {
+			next = append(next, cur)
+		}
+	}
+	if on {
+		next = append(next, id)
+	}
+	return s.st.SetMembers(r.Context(), sess.ID, next)
+}
+
+// anyAgent は共通とチームの両方から引く。ID は全体で一意なので、どちらから
+// 来たかは ID だけで決まる。
+func (s *Server) anyAgent(id string) (*agent.Agent, bool) {
+	if a, ok := s.agents.Get(id); ok {
+		return a, true
+	}
+	return s.teamAgents.Get(id)
+}
+
+// handleCreateTeamAgent はチームエージェントを作り、この会話で有効にする。
+//
+// 作ってから「有効化」をもう一度押させる形にはしない。パネルから人を足したのに
+// この会話に居ないのは、誰の期待とも合わない。
+func (s *Server) handleCreateTeamAgent(w http.ResponseWriter, r *http.Request) {
 	sess, err := s.teamSession(r)
 	if err != nil {
 		writeError(w, statusFor(err), err)
@@ -162,74 +152,26 @@ func (s *Server) handleCreateSessionAgent(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := s.freeInSession(sess, b.ID); err != nil {
+	if err := s.freeAgentID(b.ID); err != nil {
 		writeError(w, http.StatusConflict, err)
 		return
 	}
 	a := &agent.Agent{ID: b.ID}
-	b.intoLocal(a)
-	if err := agent.SaveLocal(s.cfg.SessionAgentsDir(sess.ID), a); err != nil {
+	b.intoTeam(a)
+	if err := agent.SaveTeam(s.cfg.TeamAgentDir(), a); err != nil {
+		writeError(w, statusFor(err), err)
+		return
+	}
+	s.reloadTeamAgents()
+	if err := s.setEnabled(r, sess, b.ID, true); err != nil {
 		writeError(w, statusFor(err), err)
 		return
 	}
 	s.writeRoster(w, r, sess.ID)
 }
 
-// handleUpdateSessionAgent は固有の定義を書き戻す。
-func (s *Server) handleUpdateSessionAgent(w http.ResponseWriter, r *http.Request) {
-	sess, err := s.teamSession(r)
-	if err != nil {
-		writeError(w, statusFor(err), err)
-		return
-	}
-	cur, err := s.localAgent(sess, r.PathValue("aid"))
-	if err != nil {
-		writeError(w, statusFor(err), err)
-		return
-	}
-	var b agentBody
-	if err := decodeJSON(r, &b); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	next := *cur
-	b.intoLocal(&next)
-	if err := agent.SaveLocal(s.cfg.SessionAgentsDir(sess.ID), &next); err != nil {
-		writeError(w, statusFor(err), err)
-		return
-	}
-	s.writeRoster(w, r, sess.ID)
-}
-
-// handleDeleteSessionAgent は固有の定義を消す。過去の発言には触れない。
-// 消すと、残っているメッセージの送り手が誰なのか分からなくなる。
-func (s *Server) handleDeleteSessionAgent(w http.ResponseWriter, r *http.Request) {
-	sess, err := s.teamSession(r)
-	if err != nil {
-		writeError(w, statusFor(err), err)
-		return
-	}
-	id := r.PathValue("aid")
-	if id == sess.AgentID {
-		writeError(w, http.StatusConflict,
-			errors.New("窓口は消せません。先に窓口を別のメンバーへ移してください"))
-		return
-	}
-	a, err := s.localAgent(sess, id)
-	if err != nil {
-		writeError(w, statusFor(err), err)
-		return
-	}
-	if err := os.Remove(a.File); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	s.writeRoster(w, r, sess.ID)
-}
-
-// handleCopyAgent は共通エージェントを写して固有の定義にする。
-//
-// 写したあとは元と縁が切れる。以後どちらを直しても、もう片方は変わらない。
+// handleCopyAgent は共通エージェントを写してチームエージェントにし、この
+// 会話で有効にする。写したあとは元と縁が切れる。
 func (s *Server) handleCopyAgent(w http.ResponseWriter, r *http.Request) {
 	sess, err := s.teamSession(r)
 	if err != nil {
@@ -244,16 +186,16 @@ func (s *Server) handleCopyAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	src, ok := s.agents.Get(in.AgentID)
+	src, ok := s.anyAgent(in.AgentID)
 	if !ok {
 		writeError(w, http.StatusNotFound,
 			fmt.Errorf("エージェント %q の定義が見つかりません", in.AgentID))
 		return
 	}
 	if in.ID == "" {
-		in.ID = s.freeCopyID(sess, src.ID)
+		in.ID = s.freeCopyID(src.ID)
 	}
-	if err := s.freeInSession(sess, in.ID); err != nil {
+	if err := s.freeAgentID(in.ID); err != nil {
 		writeError(w, http.StatusConflict, err)
 		return
 	}
@@ -262,57 +204,102 @@ func (s *Server) handleCopyAgent(w http.ResponseWriter, r *http.Request) {
 	next.ID = in.ID
 	next.File = ""
 	next.Fixed = false
-	// 規定エージェントの写しは Tier 0 のままでよい。対等な 2 人組は正当な
-	// 構成であり、同位どうしは依頼しかできないという規則がそれを支える。
-	if err := agent.SaveLocal(s.cfg.SessionAgentsDir(sess.ID), &next); err != nil {
+	if err := agent.SaveTeam(s.cfg.TeamAgentDir(), &next); err != nil {
+		writeError(w, statusFor(err), err)
+		return
+	}
+	s.reloadTeamAgents()
+	if err := s.setEnabled(r, sess, in.ID, true); err != nil {
 		writeError(w, statusFor(err), err)
 		return
 	}
 	s.writeRoster(w, r, sess.ID)
 }
 
-// freeInSession はその ID を会話の中で使えるかを返す。
+// handleUpdateTeamAgent は定義を書き戻す。
 //
-// 一意性を会話の中に閉じるのは、メンションの宛先が ID だからである。同じ
-// 会話に同じ名前が 2 つあると、宛先が誰を指すのか決められない。
-func (s *Server) freeInSession(sess *store.Session, id string) error {
+// 会話 ID の下に無いのは、これが共有物への操作だからである。直せば、有効に
+// している全ての会話に効く。
+func (s *Server) handleUpdateTeamAgent(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	cur, ok := s.teamAgents.Get(id)
+	if !ok {
+		writeError(w, http.StatusNotFound,
+			fmt.Errorf("チームエージェント %q が見つかりません", id))
+		return
+	}
+	var b agentBody
+	if err := decodeJSON(r, &b); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	next := *cur
+	b.intoTeam(&next)
+	if err := agent.SaveTeam(s.cfg.TeamAgentDir(), &next); err != nil {
+		writeError(w, statusFor(err), err)
+		return
+	}
+	s.reloadTeamAgents()
+	saved, ok := s.teamAgents.Get(id)
+	if !ok {
+		writeError(w, http.StatusInternalServerError,
+			fmt.Errorf("保存した定義 %q を読み直せませんでした", id))
+		return
+	}
+	writeJSON(w, http.StatusOK, saved)
+}
+
+// handleDeleteTeamAgent は定義を消す。
+//
+// 有効にしている会話の名簿からは掃除しない。消えた定義を指している会話には
+// 「定義が見つかりません」と名簿に出る。黙って人数が減るより、何が消えたかが
+// 見えるほうがよい (#528664 の「開けるが続行できない」と同じ扱い)。
+func (s *Server) handleDeleteTeamAgent(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	a, ok := s.teamAgents.Get(id)
+	if !ok {
+		writeError(w, http.StatusNotFound,
+			fmt.Errorf("チームエージェント %q が見つかりません", id))
+		return
+	}
+	if err := agent.Delete(a); err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	s.reloadTeamAgents()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// freeAgentID はその ID を使えるかを返す。
+//
+// 一意性は共通とチームの全体で保つ。ID はメンションの宛先であると同時に、
+// 共有ディレクトリの中のファイル名でもある。2 つのチームエージェントが同じ
+// 名前を持つことはファイル名として不可能で、共通と同じ名前を持てば、その
+// 共通を有効にした会話で宛先が決まらなくなる。
+func (s *Server) freeAgentID(id string) error {
 	if err := agent.ValidateID(id); err != nil {
 		return err
 	}
 	if _, ok := s.agents.Get(id); ok {
 		return &agent.FieldError{Field: "id",
-			Reason: fmt.Sprintf("ID %q は共通エージェントが使っています。この会話の中では別の名前にしてください", id)}
+			Reason: fmt.Sprintf("ID %q は共通エージェントが使っています", id)}
 	}
-	locals, _ := agent.ReadDir(s.cfg.SessionAgentsDir(sess.ID))
-	for _, a := range locals {
-		if a.ID == id {
-			return &agent.FieldError{Field: "id",
-				Reason: fmt.Sprintf("ID %q はこの会話で既に使われています", id)}
-		}
+	if _, ok := s.teamAgents.Get(id); ok {
+		return &agent.FieldError{Field: "id",
+			Reason: fmt.Sprintf("ID %q は既にチームエージェントが使っています", id)}
 	}
 	return nil
 }
 
-// freeCopyID は写しに付ける既定の名前。元の名前は共通が使っているので、
-// そのままでは会話の中で衝突する。
-func (s *Server) freeCopyID(sess *store.Session, base string) string {
+// freeCopyID は写しに付ける既定の名前。
+func (s *Server) freeCopyID(base string) string {
 	for i := 2; i < 100; i++ {
 		id := fmt.Sprintf("%s-%d", base, i)
-		if s.freeInSession(sess, id) == nil {
+		if s.freeAgentID(id) == nil {
 			return id
 		}
 	}
 	return base + "-" + store.NewID()[:6]
-}
-
-func (s *Server) localAgent(sess *store.Session, id string) (*agent.Agent, error) {
-	locals, _ := agent.ReadDir(s.cfg.SessionAgentsDir(sess.ID))
-	for _, a := range locals {
-		if a.ID == id {
-			return a, nil
-		}
-	}
-	return nil, fmt.Errorf("%w: この会話のエージェント %q", store.ErrNotFound, id)
 }
 
 func (s *Server) writeRoster(w http.ResponseWriter, r *http.Request, id string) {
@@ -324,15 +311,26 @@ func (s *Server) writeRoster(w http.ResponseWriter, r *http.Request, id string) 
 	writeJSON(w, http.StatusOK, s.rosterOf(sess))
 }
 
-// removeSessionAgents は会話を消すときに固有の定義も消す。
+// reloadTeamAgents は書いた内容を読み直す。書いたものを自分で読み返すことで、
+// 画面が返す一覧とファイルの中身が食い違わない。
+func (s *Server) reloadTeamAgents() { s.teamAgents.LoadTeam(s.cfg.TeamAgentPaths()) }
+
+// canAnswer はその会話でそのエージェントを答え手にできるかを返す。
 //
-// 定義はその会話のために作られたもので、会話が無くなれば読み手が居ない。
-// 作業ディレクトリを消さないこと (#903215) とは扱いが違う — あちらは利用者が
-// 置いた材料と成果物であり、こちらは会話の一部である。
-func (s *Server) removeSessionAgents(_ context.Context, id string) {
-	dir := s.cfg.SessionAgentsDir(id)
-	if dir == "" {
-		return
+// チームでは答え手を選ばない。宛先はメンションで決まるので、選ばせる欄が
+// あること自体が誤りになる (#640275)。
+func (s *Server) canAnswer(r *http.Request, agentID string) error {
+	sess, err := s.st.GetSession(r.Context(), r.PathValue("id"))
+	if err != nil {
+		return err
 	}
-	_ = os.RemoveAll(dir)
+	if sess.Kind == config.KindTeam {
+		return &agent.FieldError{Field: "agent_id",
+			Reason: "チームセッションでは答え手を選びません。宛先はメンションで指定してください"}
+	}
+	if _, ok := s.agents.Get(agentID); !ok {
+		return &agent.FieldError{Field: "agent_id",
+			Reason: "エージェント " + agentID + " の定義が見つかりません"}
+	}
+	return nil
 }

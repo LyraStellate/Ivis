@@ -103,9 +103,22 @@ type Set struct {
 // NewSet は空の集合を返す。
 func NewSet() *Set { return &Set{agents: map[string]*Agent{}} }
 
-// Load は探索パスを順に読み、集合を入れ替える。同じ ID があれば先勝ちとし、
-// 後から来たものは読み込みエラーとして記録する。
-func (s *Set) Load(paths []string) {
+// Load は共通の探索パスを順に読み、集合を入れ替える。同じ ID があれば
+// 先勝ちとし、後から来たものは読み込みエラーとして記録する。
+func (s *Set) Load(paths []string) { s.load(paths, true) }
+
+// LoadTeam はチームエージェントを読む。共通との違いは Tier の扱いだけである。
+//
+// Tier 0 を引き上げない。共通の一覧で 0 を規定エージェントだけに絞っているのは
+// 会話の入口を 1 つに保つためだったが、チームには規定エージェントという入口が
+// 無い。対等な 2 人組は正当な構成で、同位どうしは依頼しかできないという規則が
+// それを支える (#731906)。
+//
+// 規定の印も付けない。id が "general" のファイルを team/ へ置かれると、
+// 消せず Tier も変えられないチームエージェントができてしまう。
+func (s *Set) LoadTeam(paths []string) { s.load(paths, false) }
+
+func (s *Set) load(paths []string, floor bool) {
 	agents := map[string]*Agent{}
 	var order []string
 	var errs []LoadError
@@ -114,10 +127,12 @@ func (s *Set) Load(paths []string) {
 		found, loadErrs := ReadDir(root)
 		errs = append(errs, loadErrs...)
 		for _, a := range found {
-			// 共通の一覧で Tier 0 を持てるのは規定エージェントだけである。
-			// 入口が 2 つある状態を、定義を手で書き換えて作れないようにする
-			// ため (#528664)。会話の中の名簿にはこの制限は無い。
-			if !a.Fixed && a.Tier < MinUserTier {
+			if !floor {
+				a.Fixed = false
+			} else if !a.Fixed && a.Tier < MinUserTier {
+				// 共通の一覧で Tier 0 を持てるのは規定エージェントだけである。
+				// 入口が 2 つある状態を、定義を手で書き換えて作れないように
+				// するため (#528664)。チームの一覧にこの制限は無い。
 				a.Tier = MinUserTier
 			}
 			if prev, ok := agents[a.ID]; ok {
@@ -140,8 +155,12 @@ func (s *Set) Load(paths []string) {
 
 // ReadDir は 1 つのディレクトリの定義を ID 順に読む。読めなかったものは
 // 失敗として返し、残りは通す。1 つ壊れただけで手元の定義が全部読めなくなる
-// 事態を避けるためで、この扱いは共通の探索パスでもセッション固有の置き場
-// (#731906) でも同じである。
+// 事態を避けるためで、この扱いは共通の探索パスでもチームの置き場 (#731906)
+// でも同じである。
+//
+// **サブディレクトリは読まない。** チームエージェントを共通の探索パスの下の
+// team/ へ置ける根拠がこれである。混ぜて読むようにすると、共通の一覧に
+// チームエージェントが並ぶ。
 //
 // ディレクトリが無いことは失敗ではない。まだ誰も作っていないだけである。
 func ReadDir(root string) ([]*Agent, []LoadError) {

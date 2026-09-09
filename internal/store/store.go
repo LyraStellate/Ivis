@@ -683,3 +683,35 @@ func (s *Store) Rewind(ctx context.Context, sessionID, messageID string) (Remove
 	}
 	return out, content, nil
 }
+
+// RenameAgent はその会話に残っている記録の中のエージェント ID を差し替える。
+//
+// 移行で名前が変わったときに要る。書き換えないと、@reviewer が別人になった
+// 会話で、過去の吹き出しと担当チケットが新しい reviewer の名前と色で描かれる。
+// 会話が「誰が何をしたか」の記録として信用できなくなる (#640275)。
+//
+// 1 つの書き込みにまとめるのは、途中で落ちたときに発言だけ直ってチケットが
+// 古いまま、という食い違いを作らないためである。
+func (s *Store) RenameAgent(ctx context.Context, sessionID, from, to string) error {
+	if from == "" || to == "" || from == to {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	for _, stmt := range []string{
+		`UPDATE messages SET agent_id = ? WHERE session_id = ? AND agent_id = ?`,
+		`UPDATE messages SET to_agent_id = ? WHERE session_id = ? AND to_agent_id = ?`,
+		`UPDATE tickets SET assignee = ? WHERE session_id = ? AND assignee = ?`,
+		`UPDATE tickets SET author = ? WHERE session_id = ? AND author = ?`,
+		`UPDATE ticket_notes SET author = ? WHERE session_id = ? AND author = ?`,
+	} {
+		if _, err := tx.ExecContext(ctx, stmt, to, sessionID, from); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}

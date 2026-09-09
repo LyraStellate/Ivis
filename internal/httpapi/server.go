@@ -22,15 +22,18 @@ import (
 
 // Server は API の実装。
 type Server struct {
-	cfg     *config.Config
-	st      *store.Store
-	agents  *agent.Set
-	skills  *skillreg.Registry
-	tools   *tools.Registry
-	prov    provider.Provider
-	newProv func(baseURL string) provider.Provider
-	eng     *engine.Engine
-	assets  fs.FS
+	cfg    *config.Config
+	st     *store.Store
+	agents *agent.Set
+	// teamAgents はチームセッションでだけ使えるエージェント。共通と別の
+	// 一覧にしてあるのは、Tier 0 の扱いと委譲先の一覧が違うためである。
+	teamAgents *agent.Set
+	skills     *skillreg.Registry
+	tools      *tools.Registry
+	prov       provider.Provider
+	newProv    func(baseURL string) provider.Provider
+	eng        *engine.Engine
+	assets     fs.FS
 
 	// runs は会話ごとの実行の占有。Discord ブリッジと共有する。共有しないと、
 	// 同じ会話が両方の入口から同時に走る (#617204)。
@@ -62,9 +65,11 @@ type Deps struct {
 	Config *config.Config
 	Store  *store.Store
 	Agents *agent.Set
-	Skills *skillreg.Registry
-	Tools  *tools.Registry
-	Prov   provider.Provider
+	// TeamAgents はチームエージェント。呼ぶ側が読み込んで渡す。
+	TeamAgents *agent.Set
+	Skills     *skillreg.Registry
+	Tools      *tools.Registry
+	Prov       provider.Provider
 	// NewProvider は接続先が変わったときに提供元を作り直すために使う。
 	NewProvider func(baseURL string) provider.Provider
 	Assets      fs.FS
@@ -76,31 +81,33 @@ type Deps struct {
 // New は Server を組み立てる。
 func New(d Deps) *Server {
 	s := &Server{
-		cfg:     d.Config,
-		st:      d.Store,
-		agents:  d.Agents,
-		skills:  d.Skills,
-		tools:   d.Tools,
-		prov:    d.Prov,
-		newProv: d.NewProvider,
-		assets:  d.Assets,
-		runs:    engine.NewRuns(),
-		procs:   tools.NewProcSet(),
-		lives:   map[string]*live{},
-		pending: map[string]chan bool{},
-		asking:  map[string]chan string{},
+		cfg:        d.Config,
+		st:         d.Store,
+		agents:     d.Agents,
+		teamAgents: d.TeamAgents,
+		skills:     d.Skills,
+		tools:      d.Tools,
+		prov:       d.Prov,
+		newProv:    d.NewProvider,
+		assets:     d.Assets,
+		runs:       engine.NewRuns(),
+		procs:      tools.NewProcSet(),
+		lives:      map[string]*live{},
+		pending:    map[string]chan bool{},
+		asking:     map[string]chan string{},
 	}
 	s.eng = &engine.Engine{
-		Cfg:      d.Config,
-		Store:    d.Store,
-		Agents:   d.Agents,
-		Skills:   d.Skills,
-		Tools:    d.Tools,
-		Provider: d.Prov,
-		Approver: s,
-		Asker:    s,
-		Search:   websearch.New(d.Config.SearchBackend, d.Config.SearchAPIKey),
-		Procs:    s.procs,
+		Cfg:        d.Config,
+		Store:      d.Store,
+		Agents:     d.Agents,
+		TeamAgents: d.TeamAgents,
+		Skills:     d.Skills,
+		Tools:      d.Tools,
+		Provider:   d.Prov,
+		Approver:   s,
+		Asker:      s,
+		Search:     websearch.New(d.Config.SearchBackend, d.Config.SearchAPIKey),
+		Procs:      s.procs,
 	}
 	s.discord = discord.New(discord.Deps{
 		Cfg:    d.Config,
@@ -178,12 +185,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/sessions/{id}/rewind", s.handleRewind)
 
 	// チームセッションの名簿 (#731906)。
+	//
+	// 作成とコピーだけ会話の下にある。どちらも「定義を作る」と「この会話で
+	// 有効にする」を 1 度に行う操作だからで、編集と削除は共有物への操作
+	// なので会話 ID の下に置かない。
 	mux.HandleFunc("GET /api/sessions/{id}/agents", s.handleRoster)
-	mux.HandleFunc("POST /api/sessions/{id}/agents", s.handleCreateSessionAgent)
+	mux.HandleFunc("POST /api/sessions/{id}/agents", s.handleCreateTeamAgent)
 	mux.HandleFunc("POST /api/sessions/{id}/agents/copy", s.handleCopyAgent)
-	mux.HandleFunc("PUT /api/sessions/{id}/agents/{aid}", s.handleUpdateSessionAgent)
-	mux.HandleFunc("DELETE /api/sessions/{id}/agents/{aid}", s.handleDeleteSessionAgent)
-	mux.HandleFunc("POST /api/sessions/{id}/members", s.handleJoin)
+	mux.HandleFunc("POST /api/sessions/{id}/members", s.handleEnable)
+	mux.HandleFunc("PUT /api/team-agents/{id}", s.handleUpdateTeamAgent)
+	mux.HandleFunc("DELETE /api/team-agents/{id}", s.handleDeleteTeamAgent)
 
 	// チケット (#189542)。
 	mux.HandleFunc("GET /api/sessions/{id}/tickets", s.handleListTickets)

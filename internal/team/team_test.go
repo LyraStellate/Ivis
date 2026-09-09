@@ -30,36 +30,34 @@ func def(tier int) map[string]any {
 	return map[string]any{"model": "m", "tier": tier, "instructions": "x"}
 }
 
-// setup は共通 2 体・固有 1 体のチームを組む。
-func setup(t *testing.T) (*config.Config, *agent.Set, *store.Session) {
+// setup は共通 2 体・チーム 1 体を置き、3 人とも有効にした会話を返す。
+func setup(t *testing.T) (*agent.Set, *agent.Set, *store.Session) {
 	t.Helper()
 	root := t.TempDir()
-	common := filepath.Join(root, "agents")
-	writeAgent(t, common, "boss", def(1))
-	writeAgent(t, common, "hand", def(2))
+	cfg := config.Default()
+	cfg.AgentPaths = []string{filepath.Join(root, "agents")}
+	writeAgent(t, cfg.AgentPaths[0], "boss", def(1))
+	writeAgent(t, cfg.AgentPaths[0], "hand", def(2))
+	writeAgent(t, cfg.TeamAgentDir(), "scout", def(2))
 
 	set := agent.NewSet()
-	set.Load([]string{common})
-
-	cfg := config.Default()
-	cfg.DataDir = filepath.Join(root, "data")
-	cfg.AgentPaths = []string{common}
+	set.Load(cfg.AgentPaths)
+	teamSet := agent.NewSet()
+	teamSet.LoadTeam(cfg.TeamAgentPaths())
 
 	sess := &store.Session{ID: "s1", AgentID: "boss", Kind: config.KindTeam,
-		Members: []string{"boss", "hand"}}
-	writeAgent(t, cfg.SessionAgentsDir(sess.ID), "scout", def(2))
-	return cfg, set, sess
+		Members: []string{"boss", "hand", "scout"}}
+	return set, teamSet, sess
 }
 
 func TestParseMention(t *testing.T) {
 	cases := []struct{ in, to, body string }{
 		{"@coder これを直して", "coder", "これを直して"},
-		{"@* 誰か見て", "*", "誰か見て"},
 		{"宛先なし", "", "宛先なし"},
 		{"@coder", "coder", ""},
 		{"@coder、頼む", "coder", "、頼む"},
-		// メールアドレスのような書き出しは無いが、@ だけで始まる文は宛先に
-		// ならない。空の宛先を作ると、行き先の無いメッセージができる。
+		// @ だけで始まる文は宛先にならない。空の宛先を作ると、行き先の無い
+		// メッセージができる。
 		{"@ 空", "", "@ 空"},
 	}
 	for _, c := range cases {
@@ -70,73 +68,112 @@ func TestParseMention(t *testing.T) {
 	}
 }
 
-// 名簿は共通と固有をひとつに束ねる。並びは Tier 順。
-func TestRosterMergesCommonAndLocal(t *testing.T) {
-	cfg, set, sess := setup(t)
-	r := Load(cfg, set, sess)
+// 名簿は「有効にしてある ID」を 2 つの一覧から引いて組み立てる。並びは Tier 順。
+func TestRosterDrawsFromBothSets(t *testing.T) {
+	set, teamSet, sess := setup(t)
+	r := Load(set, teamSet, sess)
 
-	got := r.IDs()
-	want := []string{"boss", "hand", "scout"}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("名簿 = %v, want %v", got, want)
+	if got := strings.Join(r.IDs(), ","); got != "boss,hand,scout" {
+		t.Fatalf("名簿 = %v, want boss,hand,scout", got)
 	}
-	m, _ := r.Get("scout")
-	if !m.Local {
-		t.Error("scout は固有のはずだが、共通として載っている")
+	if m, _ := r.Get("scout"); m.Scope != ScopeTeam {
+		t.Errorf("scout の由来 = %q, want %q", m.Scope, ScopeTeam)
 	}
-	if m, _ := r.Get("boss"); m.Local {
-		t.Error("boss は共通のはずだが、固有として載っている")
+	if m, _ := r.Get("boss"); m.Scope != ScopeCommon {
+		t.Errorf("boss の由来 = %q, want %q", m.Scope, ScopeCommon)
 	}
 	if len(r.Errors) != 0 {
 		t.Errorf("読み込みの失敗が出ている: %v", r.Errors)
 	}
 }
 
-// 同じ名前が 2 つあると、宛先が誰を指すのか決められない。固有を残し、
-// 衝突は失敗として記録する。黙って片方を消さない。
-func TestLocalWinsOnCollision(t *testing.T) {
-	cfg, set, sess := setup(t)
-	writeAgent(t, cfg.SessionAgentsDir(sess.ID), "hand", def(3))
+// 有効にしていないものは名簿に載らない。定義があることと、この会話で使う
+// ことは別である。
+func TestOnlyEnabledAgentsAreMembers(t *testing.T) {
+	set, teamSet, sess := setup(t)
+	sess.Members = []string{"hand"}
 
-	r := Load(cfg, set, sess)
-	m, ok := r.Get("hand")
-	if !ok || !m.Local {
-		t.Fatal("固有の hand が名簿に載っていない")
-	}
-	if m.Tier != 3 {
-		t.Errorf("Tier = %d, want 3 (固有の定義)", m.Tier)
-	}
-	if len(r.Errors) == 0 {
-		t.Error("衝突が失敗として記録されていない")
+	r := Load(set, teamSet, sess)
+	if got := strings.Join(r.IDs(), ","); got != "hand" {
+		t.Errorf("名簿 = %v, want hand だけ", got)
 	}
 }
 
-// 参加している共通の定義が消えていたら、その 1 体だけが落ちる。
-func TestMissingCommonMemberIsReported(t *testing.T) {
-	cfg, set, sess := setup(t)
+// 定義が消えた相手は名簿から落ちる。黙って人数を減らさず、何が欠けたのかを出す。
+func TestMissingDefinitionIsReported(t *testing.T) {
+	set, teamSet, sess := setup(t)
 	sess.Members = append(sess.Members, "gone")
 
-	r := Load(cfg, set, sess)
+	r := Load(set, teamSet, sess)
 	if _, ok := r.Get("gone"); ok {
-		t.Error("定義の無いメンバーが名簿に載っている")
+		t.Error("定義の無い相手が名簿に載っている")
 	}
 	if len(r.Members) != 3 {
 		t.Errorf("メンバー数 = %d, want 3", len(r.Members))
 	}
 	if len(r.Errors) != 1 {
-		t.Errorf("失敗の件数 = %d, want 1", len(r.Errors))
+		t.Fatalf("失敗の件数 = %d, want 1", len(r.Errors))
+	}
+	if !strings.Contains(r.Errors[0].Reason, "gone") {
+		t.Errorf("何が欠けたか分からない: %q", r.Errors[0].Reason)
+	}
+}
+
+// チームエージェントは Tier 0 を持てる。共通で 0 を絞っているのは会話の入口を
+// 1 つに保つためで、チームには規定エージェントという入口が無い。
+func TestTeamAgentsKeepTierZero(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.AgentPaths = []string{filepath.Join(root, "agents")}
+	writeAgent(t, cfg.AgentPaths[0], "peer", def(0))
+	writeAgent(t, cfg.TeamAgentDir(), "boss", def(0))
+
+	set := agent.NewSet()
+	set.Load(cfg.AgentPaths)
+	teamSet := agent.NewSet()
+	teamSet.LoadTeam(cfg.TeamAgentPaths())
+
+	if a, _ := set.Get("peer"); a.Tier != agent.MinUserTier {
+		t.Errorf("共通の Tier = %d, want %d (引き上げる)", a.Tier, agent.MinUserTier)
+	}
+	if a, _ := teamSet.Get("boss"); a.Tier != 0 {
+		t.Errorf("チームの Tier = %d, want 0 (そのまま)", a.Tier)
+	}
+	// 共通の一覧にチームエージェントが混ざらないこと。ReadDir がサブ
+	// ディレクトリを読まない性質の上に、この分離が乗っている。
+	if _, ok := set.Get("boss"); ok {
+		t.Error("共通の一覧にチームエージェントが混ざっている")
+	}
+}
+
+// team/general.json を置かれても規定エージェント扱いにしない。消せず Tier も
+// 変えられないチームエージェントができてしまう。
+func TestTeamAgentIsNeverFixed(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.AgentPaths = []string{filepath.Join(root, "agents")}
+	writeAgent(t, cfg.TeamAgentDir(), agent.DefaultID, def(0))
+
+	teamSet := agent.NewSet()
+	teamSet.LoadTeam(cfg.TeamAgentPaths())
+	a, ok := teamSet.Get(agent.DefaultID)
+	if !ok {
+		t.Fatal("読めていない")
+	}
+	if a.Fixed {
+		t.Error("チームエージェントが規定エージェント扱いになっている")
 	}
 }
 
 // 何を送れるかは Tier の上下だけで決まる。
 func TestRelationFollowsTier(t *testing.T) {
-	cfg, set, sess := setup(t)
-	r := Load(cfg, set, sess)
+	set, teamSet, sess := setup(t)
+	r := Load(set, teamSet, sess)
 
 	cases := []struct{ from, to, want string }{
-		{"boss", "hand", RelOrder},    // 下位へは指示
-		{"hand", "boss", RelReport},   // 上位へは報告
-		{"hand", "scout", RelRequest}, // 同位へは依頼
+		{"boss", "hand", RelOrder},
+		{"hand", "boss", RelReport},
+		{"hand", "scout", RelRequest},
 		{"boss", "居ない", ""},
 	}
 	for _, c := range cases {
@@ -146,79 +183,74 @@ func TestRelationFollowsTier(t *testing.T) {
 	}
 }
 
-// 指示文の名簿には、相手ごとに何ができるかが言葉で書かれている。Tier の数を
-// 出して推論させると、必ずどこかで向きが逆になる。
-func TestRollNamesWhatEachCanDo(t *testing.T) {
-	cfg, set, sess := setup(t)
-	r := Load(cfg, set, sess)
+func TestSubordinatesAndSuperiors(t *testing.T) {
+	set, teamSet, sess := setup(t)
+	r := Load(set, teamSet, sess)
 
-	got := r.Roll("hand")
-	for _, want := range []string{"boss", RelReport, "scout", RelRequest, "窓口は boss"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("名簿に %q が無い:\n%s", want, got)
+	ids := func(list []*Member) string {
+		var out []string
+		for _, m := range list {
+			out = append(out, m.ID)
+		}
+		return strings.Join(out, ",")
+	}
+	if got := ids(r.Subordinates("boss")); got != "hand,scout" {
+		t.Errorf("boss の下位 = %v", got)
+	}
+	if got := ids(r.Superiors("hand")); got != "boss" {
+		t.Errorf("hand の上位 = %v", got)
+	}
+	if n := len(r.Superiors("boss")); n != 0 {
+		t.Errorf("boss に上位が居る: %d", n)
+	}
+	if n := len(r.Subordinates("hand")); n != 0 {
+		t.Errorf("同位を下位として数えている: %d", n)
+	}
+}
+
+// 窓口はもう無い。名簿にも進め方にも出てはいけない。宛先の行き先だけは
+// 書いておく — 書かないと、モデルが「まず窓口へ回します」と補い始める。
+func TestNoLeadAnywhere(t *testing.T) {
+	set, teamSet, sess := setup(t)
+	r := Load(set, teamSet, sess)
+
+	for _, text := range []string{r.Roll("hand"), r.Roll("boss"),
+		Guide(r, "hand"), Guide(r, "boss")} {
+		if strings.Contains(text, "窓口") {
+			t.Errorf("窓口が残っている:\n%s", text)
+		}
+		if strings.Contains(text, `"*"`) {
+			t.Errorf("宛先を委ねる印が残っている:\n%s", text)
 		}
 	}
-	if strings.Contains(got, "hand (Tier 2, hand): 報告") {
-		t.Error("自分自身に関係が書かれている")
+	if !strings.Contains(r.Roll("hand"), "名指し") {
+		t.Errorf("宛先の決まり方が伝わっていない:\n%s", r.Roll("hand"))
 	}
 }
 
-// 窓口だけが宛先を委ねられる。誰でも使えると、決めないまま回し続ける。
-func TestGuideMentionsAnyoneOnlyForLead(t *testing.T) {
-	cfg, set, sess := setup(t)
-	r := Load(cfg, set, sess)
-
-	if strings.Contains(Guide(r, "hand"), Anyone) {
-		t.Error("窓口でない相手に \"*\" の使い方を教えている")
-	}
-	if !strings.Contains(Guide(r, "boss"), Anyone) {
-		t.Error("窓口に \"*\" の使い方が伝わっていない")
-	}
-}
-
-// 下位を持つ相手には、上司としての進め方を渡す。全員に同じ文を渡すと、
-// 指示を出す側まで「勝手に始めない」「確認を取る」と読み、部下に許可を
-// 求め始める。
+// 下位を持つ相手には上司としての進め方を渡す。全員へ同じ文を渡すと、指示を
+// 出す側まで「勝手に始めない」「確認を取る」と読み、部下に許可を求め始める。
 func TestGuideDependsOnPosition(t *testing.T) {
-	cfg, set, sess := setup(t)
-	r := Load(cfg, set, sess)
+	set, teamSet, sess := setup(t)
+	r := Load(set, teamSet, sess)
 
-	// boss (Tier 1) の下には hand と scout (Tier 2) が居る。
 	boss := Guide(r, "boss")
-	for _, want := range []string{"2 人の下位", "上司", "許可や確認を求めない", "指示は依頼ではありません"} {
+	for _, want := range []string{"2 人の下位", "上司", "許可や確認を求めない"} {
 		if !strings.Contains(boss, want) {
 			t.Errorf("上司向けの進め方に %q が無い:\n%s", want, boss)
 		}
 	}
-	if strings.Contains(boss, "勝手に始めない") {
-		t.Error("下位を持つ相手に、部下向けの心得を渡している")
+	// 上に誰も居ないので、全体を決めるのは自分だと伝える。窓口という指名では
+	// なく、Tier の位置から出る性質である。
+	if !strings.Contains(boss, "上位のメンバーは居ません") {
+		t.Errorf("最上位であることが伝わっていない:\n%s", boss)
 	}
 
-	// hand (Tier 2) の下には誰も居ない。
 	hand := Guide(r, "hand")
 	if !strings.Contains(hand, "下位は居ません") {
 		t.Errorf("部下向けの進め方になっていない:\n%s", hand)
 	}
-	if strings.Contains(hand, "上司です") {
-		t.Error("下位の居ない相手を上司として扱っている")
-	}
-	if !strings.Contains(hand, "窓口は boss") {
-		t.Error("全体の判断がどこにあるかが伝わっていない")
-	}
-}
-
-func TestSubordinates(t *testing.T) {
-	cfg, set, sess := setup(t)
-	r := Load(cfg, set, sess)
-
-	var got []string
-	for _, m := range r.Subordinates("boss") {
-		got = append(got, m.ID)
-	}
-	if strings.Join(got, ",") != "hand,scout" {
-		t.Errorf("下位 = %v", got)
-	}
-	if n := len(r.Subordinates("hand")); n != 0 {
-		t.Errorf("同位を下位として数えている: %d", n)
+	if strings.Contains(hand, "上位のメンバーは居ません") {
+		t.Error("上位が居るのに最上位として扱っている")
 	}
 }

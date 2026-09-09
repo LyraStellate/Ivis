@@ -32,15 +32,11 @@ type TeamMessage struct {
 // チーム専用のツールはそもそもモデルへ渡らない。
 type TeamContext struct {
 	// Self はいま手番を取っているメンバー。
-	Self string
-	// LeadID は窓口。宛先を "*" にできるのはここだけである。
-	LeadID  string
+	Self    string
 	Members []TeamMember
 	// RequesterID は、この手番を始めさせた依頼の送り主。依頼でなければ空。
 	// ここへ返すときは可否を添えなければならない。
 	RequesterID string
-	// Anyone は宛先を決めずに送るときの印。engine が team 側の値を渡す。
-	Anyone string
 	// AcceptWord と RejectWord は可否に使える語。
 	AcceptWord string
 	RejectWord string
@@ -118,7 +114,7 @@ func (t *sendMessageTool) Description() string {
 }
 func (t *sendMessageTool) Parameters() map[string]any {
 	return schema(map[string]any{
-		"to":       strProp("宛先のメンバー ID。窓口だけは \"*\" を指定して、宛先の判断を委ねられる。"),
+		"to":       strProp("宛先のメンバー ID。名指しすること。"),
 		"why":      strProp("なぜそれをすることになったか。誰にどう頼まれたのかを書く。"),
 		"did":      strProp("この手番で実際にやったこと。まだ何もしていないなら、これから何をするか。"),
 		"message":  strProp("相手へのメッセージ本文。相手が受け取るのはこれと why と did だけである。"),
@@ -154,14 +150,14 @@ func (t *sendMessageTool) Execute(ctx context.Context, ec *ExecContext, args map
 	if to == tc.Self {
 		return "", fmt.Errorf("自分自身へは送れません。%s", tc.roll())
 	}
-	if to == tc.Anyone {
-		// 宛先を選ぶのは窓口の仕事である。誰でも "*" を使えると、決めない
-		// まま回し続けることになる。
-		if tc.Self != tc.LeadID {
-			return "", fmt.Errorf("宛先に %q を指定できるのは窓口 (%s) だけです。相手を決めてください。%s",
-				tc.Anyone, tc.LeadID, tc.roll())
-		}
-	} else if _, ok := tc.member(to); !ok {
+	// "*" は「宛先を決めずに送る」ための印だった。窓口を廃したので受け皿が
+	// 無い。名指しで断るのは、消すだけだと下の名簿の判定に落ちて「"*" はこの
+	// 会話に居ません」という意味の通らない文になるからである。指示文が
+	// 変わっても、モデルは学習済みの癖でこれを試す (#640275)。
+	if to == "*" {
+		return "", fmt.Errorf("宛先に \"*\" は使えません。相手を名指ししてください。%s", tc.roll())
+	}
+	if _, ok := tc.member(to); !ok {
 		return "", fmt.Errorf("%q はこの会話に居ません。%s", to, tc.roll())
 	}
 
@@ -180,9 +176,6 @@ func (t *sendMessageTool) Execute(ctx context.Context, ec *ExecContext, args map
 
 	if err := tc.Send(ctx, msg); err != nil {
 		return "", err
-	}
-	if to == tc.Anyone {
-		return "宛先を決められなかったものとして記録しました。この枝はここで終わります。", nil
 	}
 	return fmt.Sprintf("%s へ送りました。返事は次の手番で届きます。この手番で伝えることが"+
 		"ほかに無ければ、ツールを呼ばずに終えてください。", to), nil

@@ -164,6 +164,12 @@ func Reported(err error) bool {
 	return errors.As(err, &r)
 }
 
+// ErrNoAddressee は宛先が書かれていないこと。
+//
+// 誰に頼むかを決めるのは利用者である。名簿が 2 人以上あるとき、こちらで
+// 選ぶ道は無い — 選べば、それは窓口を別の名前で復活させたことになる (#640275)。
+var ErrNoAddressee = errors.New("宛先が書かれていません")
+
 // KindOf は失敗を種類の名前へ写す。まとめて「エラーが発生しました」にすると、
 // 提供元の起動忘れなのか設定の誤りなのかを利用者が判断できない。
 func KindOf(err error) string {
@@ -183,6 +189,8 @@ func KindOf(err error) string {
 		return "thinking_unsupported"
 	case errors.Is(err, store.ErrNotFound):
 		return "not_found"
+	case errors.Is(err, ErrNoAddressee):
+		return "no_addressee"
 	}
 	return ""
 }
@@ -192,13 +200,17 @@ type Emit func(Event)
 
 // Engine は実行ループ本体。
 type Engine struct {
-	Cfg      *config.Config
-	Store    *store.Store
-	Agents   *agent.Set
-	Skills   *skillreg.Registry
-	Tools    *tools.Registry
-	Provider provider.Provider
-	Approver Approver
+	Cfg    *config.Config
+	Store  *store.Store
+	Agents *agent.Set
+	// TeamAgents はチームセッションでだけ使えるエージェント。共通と別の
+	// 一覧にしてあるのは、Tier 0 の扱いと委譲先の一覧が違うためである
+	// (#731906)。
+	TeamAgents *agent.Set
+	Skills     *skillreg.Registry
+	Tools      *tools.Registry
+	Provider   provider.Provider
+	Approver   Approver
 	// Asker は利用者へ問う窓口。無ければエージェントは問えず、自分で決める。
 	Asker Asker
 	// Search は Web 検索の取得元。設定に応じて差し替わる。

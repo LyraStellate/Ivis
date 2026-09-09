@@ -7,8 +7,10 @@ import (
 	"strings"
 
 	"github.com/LyraStellate/Ivis/internal/agent"
+	"github.com/LyraStellate/Ivis/internal/config"
 	"github.com/LyraStellate/Ivis/internal/provider"
 	"github.com/LyraStellate/Ivis/internal/store"
+	"github.com/LyraStellate/Ivis/internal/team"
 )
 
 // コンテキストの圧縮 (#486237)。
@@ -76,9 +78,9 @@ func (e *Engine) Compact(ctx context.Context, sessionID, instructions string, pr
 	if err != nil {
 		return nil, err
 	}
-	ag, ok := e.Agents.Get(sess.AgentID)
-	if !ok {
-		return nil, fmt.Errorf("エージェント %q の定義が見つかりません", sess.AgentID)
+	ag, err := e.summarizer(sess)
+	if err != nil {
+		return nil, err
 	}
 
 	// 対象は前回の要約以降。要約が要約を含む形になるので、古い話ほど圧縮が
@@ -119,6 +121,28 @@ func (e *Engine) Compact(ctx context.Context, sessionID, instructions string, pr
 		return nil, err
 	}
 	return &CompactResult{Summarized: len(target), Summary: summary}, nil
+}
+
+// summarizer は要約を書くエージェントを選ぶ。
+//
+// 直列の会話ではその会話の答え手である。チームには答え手が居ないので、名簿の
+// 先頭を採る。名簿は Tier 順・同じ Tier では ID 順に整列済みなので、必ず 1 人に
+// 定まる。誰が引き金を引いても結果が同じになるよう、手番の主 (そのとき溢れた
+// 本人) は使わない — 使うと、同じ会話の要約の質が回ごとに揺れる理由を説明
+// できなくなる (#640275)。
+func (e *Engine) summarizer(sess *store.Session) (*agent.Agent, error) {
+	if sess.Kind == config.KindTeam {
+		roster := team.Load(e.Agents, e.TeamAgents, sess)
+		if len(roster.Members) == 0 {
+			return nil, fmt.Errorf("この会話にはメンバーが 1 人も居ないので、まとめられません")
+		}
+		return roster.Members[0].Agent, nil
+	}
+	ag, ok := e.Agents.Get(sess.AgentID)
+	if !ok {
+		return nil, fmt.Errorf("エージェント %q の定義が見つかりません", sess.AgentID)
+	}
+	return ag, nil
 }
 
 // worthCompacting はまとめる余地があるかを返す。

@@ -106,25 +106,25 @@ func TestBootstrap(t *testing.T) {
 	}
 }
 
-// セッション固有の定義は Tier 0 を持てる。共通で 0 を規定エージェントだけに
+// チームエージェントは Tier 0 を持てる。共通で 0 を規定エージェントだけに
 // 絞っているのは、会話の入口が 2 つある状態を定義の書き換えで作れないように
-// するためだった (#528664)。チームの入口は窓口として会話が明示して持つので、
+// するためだった (#528664)。チームには規定エージェントという入口が無いので、
 // そこへ同じ制限を掛ける理由がない (#731906)。
-func TestLocalDefinitionsMayBeTierZero(t *testing.T) {
+func TestTeamDefinitionsMayBeTierZero(t *testing.T) {
 	peer := &Agent{ID: "peer", Model: "m", Tier: 0}
 
 	if err := Validate(peer); err == nil {
 		t.Error("共通で Tier 0 が通ってしまう")
 	}
-	if err := ValidateLocal(peer); err != nil {
-		t.Errorf("会話の中で Tier 0 が通らない: %v", err)
+	if err := ValidateTeam(peer); err != nil {
+		t.Errorf("チームで Tier 0 が通らない: %v", err)
 	}
-	if err := ValidateLocal(&Agent{ID: "peer", Model: "m", Tier: -1}); err == nil {
+	if err := ValidateTeam(&Agent{ID: "peer", Model: "m", Tier: -1}); err == nil {
 		t.Error("負の Tier が通ってしまう")
 	}
 
 	dir := t.TempDir()
-	if err := SaveLocal(dir, peer); err != nil {
+	if err := SaveTeam(dir, peer); err != nil {
 		t.Fatalf("書き出せない: %v", err)
 	}
 	found, errs := ReadDir(dir)
@@ -140,7 +140,7 @@ func TestLocalDefinitionsMayBeTierZero(t *testing.T) {
 // 1 へ引き上げる。入口を 2 つ作れないようにするため (#528664)。
 func TestCommonSetStillForbidsTierZero(t *testing.T) {
 	dir := t.TempDir()
-	if err := SaveLocal(dir, &Agent{ID: "peer", Model: "m", Tier: 0}); err != nil {
+	if err := SaveTeam(dir, &Agent{ID: "peer", Model: "m", Tier: 0}); err != nil {
 		t.Fatal(err)
 	}
 	s := NewSet()

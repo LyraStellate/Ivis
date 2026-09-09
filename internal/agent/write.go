@@ -48,14 +48,14 @@ func ValidateID(id string) error {
 // Validate は共通の定義として保存してよいかを返す。
 func Validate(a *Agent) error { return validate(a, false) }
 
-// ValidateLocal はセッション固有の定義として保存してよいかを返す。
+// ValidateTeam はチームエージェントとして保存してよいかを返す。
 //
 // 共通との違いは Tier 0 を許すことだけである。共通で 0 を規定エージェント
 // だけに絞っているのは、会話の入口が 2 つある状態を定義の書き換えで作れない
-// ようにするためだった (#528664)。チームの入口は窓口として会話が明示して
-// 持つので、そこに同じ制限を掛ける理由がない。対等な 2 人組は正当な構成で、
+// ようにするためだった (#528664)。チームには規定エージェントという入口が
+// 無いので、そこに同じ制限を掛ける理由がない。対等な 2 人組は正当な構成で、
 // 同位どうしは依頼しかできないという規則がそれを支える (#731906)。
-func ValidateLocal(a *Agent) error { return validate(a, true) }
+func ValidateTeam(a *Agent) error { return validate(a, true) }
 
 func validate(a *Agent, local bool) error {
 	if err := ValidateID(a.ID); err != nil {
@@ -95,10 +95,10 @@ func Save(dir string, a *Agent) error {
 	return writeDef(dir, a)
 }
 
-// SaveLocal はセッション固有の定義を書き出す。書き方は共通と同じで、
-// 通す検証だけが違う。
-func SaveLocal(dir string, a *Agent) error {
-	if err := ValidateLocal(a); err != nil {
+// SaveTeam はチームエージェントを書き出す。書き方は共通と同じで、通す検証
+// だけが違う。
+func SaveTeam(dir string, a *Agent) error {
+	if err := ValidateTeam(a); err != nil {
 		return err
 	}
 	return writeDef(dir, a)

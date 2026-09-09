@@ -219,12 +219,46 @@ func (c *Config) SessionWorkspace(kind, sessionID string) string {
 	return filepath.Join(c.WorkspaceDir, seg, sessionID)
 }
 
-// SessionAgentsDir はそのセッション固有のエージェント定義の置き場を返す。
+// teamAgentSeg はチームエージェントを束ねる段の名前。
 //
-// 共通の定義と同じ形式・同じ検証で読める場所に置く。「定義はファイルが正」
-// という原則をチームのためだけに折らない (#731906)。
-func (c *Config) SessionAgentsDir(sessionID string) string {
+// 作業ディレクトリの TeamDir と字面は同じだが、別の定数にしてある。片方を
+// 変えたときにもう片方が黙って付いてくるのは事故である。
+const teamAgentSeg = "team"
+
+// TeamAgentPaths はチームエージェントの定義を探すディレクトリ。
+//
+// 共通の探索パスの下に 1 段掘る。agent.ReadDir はサブディレクトリを読まない
+// ので、共通の一覧にチームエージェントが混ざらない。この分離は、その性質の
+// 上に乗っている。
+func (c *Config) TeamAgentPaths() []string {
+	out := make([]string, 0, len(c.AgentPaths))
+	for _, p := range c.AgentPaths {
+		out = append(out, filepath.Join(p, teamAgentSeg))
+	}
+	return out
+}
+
+// TeamAgentDir は新しいチームエージェントの書き先。先に書いた探索パスが
+// 優先される規則に合わせ、書き出しも先頭へ行う。
+func (c *Config) TeamAgentDir() string {
+	if len(c.AgentPaths) == 0 {
+		return ""
+	}
+	return filepath.Join(c.AgentPaths[0], teamAgentSeg)
+}
+
+// LegacySessionAgentsDir は、会話ごとにエージェント定義を置いていた頃の場所。
+//
+// チームエージェントは全てのチーム会話で共有されるようになったので、ここを
+// 読むのは起動時の移行だけである。前の版のデータベースを持ってきた人のために
+// 消さずに残す (#731906)。
+func (c *Config) LegacySessionAgentsDir(sessionID string) string {
 	return filepath.Join(c.DataDir, "sessions", sessionID, "agents")
+}
+
+// LegacySessionsDir は移行元をまとめて走査するための親。
+func (c *Config) LegacySessionsDir() string {
+	return filepath.Join(c.DataDir, "sessions")
 }
 
 // Path は設定の読み込み元を返す。
@@ -241,7 +275,9 @@ func (c *Config) EnsureDirs() error {
 		}
 	}
 	// 探索パスは存在しなくてもよい。既定のものだけ用意しておく。
-	for _, d := range append(append([]string{}, c.AgentPaths...), c.SkillPaths...) {
+	dirs := append(append([]string{}, c.AgentPaths...), c.SkillPaths...)
+	dirs = append(dirs, c.TeamAgentPaths()...)
+	for _, d := range dirs {
 		if strings.HasPrefix(d, filepath.Join(homeDir(), ".ivis")) {
 			_ = os.MkdirAll(d, 0o755)
 		}

@@ -6,14 +6,12 @@ import (
 	"testing"
 )
 
-// teamEC は boss (窓口) / hand / scout の 3 人で、いま hand が手番を取って
+// teamEC は boss / hand / scout の 3 人で、いま指定の 1 人が手番を取って
 // いる状態を作る。
 func teamEC(self string) (*ExecContext, *[]TeamMessage) {
 	var sent []TeamMessage
 	tc := &TeamContext{
 		Self:       self,
-		LeadID:     "boss",
-		Anyone:     "*",
 		AcceptWord: "受諾",
 		RejectWord: "却下",
 		Members: []TeamMember{
@@ -78,8 +76,9 @@ func TestSendMessageRejections(t *testing.T) {
 		// 名簿に居ない相手。断る理由に名簿を添えないと、同じ宛先をもう一度試す。
 		{"名簿外", "hand", args("居ない"), "居ません"},
 		{"自分自身", "hand", args("hand"), "自分自身"},
-		// 宛先を決めるのは窓口の仕事。誰でも使えると、決めないまま回り続ける。
-		{"窓口以外の *", "hand", args("*"), "窓口"},
+		// "*" の受け皿だった窓口はもう無い。名指しで断る — 消すだけだと
+		// 名簿の判定に落ち、意味の通らない文になる。
+		{"宛先を委ねる印", "hand", args("*"), `"*" は使えません`},
 		{"本文が空", "hand", args("scout", "message", "  "), "message が空"},
 		{"知らない可否", "hand", args("scout", "decision", "たぶん"), "decision"},
 	}
@@ -100,19 +99,20 @@ func TestSendMessageRejections(t *testing.T) {
 	}
 }
 
-// 窓口だけは宛先を委ねられる。ただしそれは「決められなかった」なので、
-// 次の手番にはならない。
-func TestLeadMaySendToAnyone(t *testing.T) {
-	ec, sent := teamEC("boss")
-	out, err := send(t, ec, args("*"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(*sent) != 1 || (*sent)[0].To != "*" {
-		t.Errorf("送られていない: %+v", *sent)
-	}
-	if !strings.Contains(out, "終わります") {
-		t.Errorf("枝が終わることが伝わっていない: %q", out)
+// 誰であっても宛先は名指しする。窓口が居なくなった以上、"*" に受け皿は無い。
+func TestNobodyMaySendToAnyone(t *testing.T) {
+	for _, self := range []string{"boss", "hand"} {
+		ec, sent := teamEC(self)
+		_, err := send(t, ec, args("*"))
+		if err == nil {
+			t.Fatalf("%s が \"*\" へ送れてしまう", self)
+		}
+		if !strings.Contains(err.Error(), "名指し") {
+			t.Errorf("理由 = %q", err.Error())
+		}
+		if len(*sent) != 0 {
+			t.Error("断ったのに送られている")
+		}
 	}
 }
 

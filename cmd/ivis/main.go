@@ -20,6 +20,7 @@ import (
 	"github.com/LyraStellate/Ivis/internal/provider/ollama"
 	"github.com/LyraStellate/Ivis/internal/skillreg"
 	"github.com/LyraStellate/Ivis/internal/store"
+	"github.com/LyraStellate/Ivis/internal/team"
 	"github.com/LyraStellate/Ivis/internal/tools"
 	"github.com/LyraStellate/Ivis/web"
 )
@@ -58,8 +59,17 @@ func run() error {
 	}
 	defer st.Close()
 
+	// 会話ごとに置いていた定義を、共有のチームエージェントへ移す。読み込む
+	// 前でなければ、移したものがこの起動で見えない (#731906)。
+	moved, err := team.MigrateSessionAgents(context.Background(), cfg, st)
+	if err != nil {
+		log.Printf("エージェントの移行に失敗しました: %v", err)
+	}
+
 	agents := agent.NewSet()
 	agents.Load(cfg.AgentPaths)
+	teamAgents := agent.NewSet()
+	teamAgents.LoadTeam(cfg.TeamAgentPaths())
 	skills := skillreg.New()
 	skills.Load(cfg.SkillPaths)
 
@@ -76,6 +86,7 @@ func run() error {
 		Config:      cfg,
 		Store:       st,
 		Agents:      agents,
+		TeamAgents:  teamAgents,
 		Skills:      skills,
 		Tools:       tools.NewRegistry(),
 		Prov:        newProvider(cfg.OllamaBaseURL),
@@ -92,7 +103,7 @@ func run() error {
 		return err
 	}
 
-	report(cfg, agents, skills, ln.Addr().String())
+	report(cfg, agents, teamAgents, skills, moved, ln.Addr().String())
 
 	httpSrv := &http.Server{Handler: srv.Handler()}
 	errCh := make(chan error, 1)
@@ -231,13 +242,15 @@ func isTailnet(ip net.IP) bool {
 
 // report は起動時に、読み込み結果と問題点を標準出力に出す。黙って起動すると
 // 「編集したスキルが反映されない」ような状況で手がかりが残らない。
-func report(cfg *config.Config, agents *agent.Set, skills *skillreg.Registry, addr string) {
+func report(cfg *config.Config, agents, teamAgents *agent.Set, skills *skillreg.Registry,
+	moved team.Result, addr string) {
 	printAddresses(addr)
 	fmt.Printf("  設定          %s\n", cfg.Path())
 	fmt.Printf("  Ollama        %s\n", cfg.OllamaBaseURL)
 	fmt.Printf("  作業ディレクトリ %s (会話ごとに %s/<ID> へ分かれる)\n",
 		cfg.WorkspaceDir, config.SeriesDir)
-	fmt.Printf("  エージェント    %d 件\n", len(agents.List()))
+	fmt.Printf("  エージェント    %d 件 (チーム専用 %d 件)\n",
+		len(agents.List()), len(teamAgents.List()))
 	fmt.Printf("  スキル          %d 件\n", len(skills.List()))
 	if cfg.Discord.Enabled {
 		state := "トークン未設定"
@@ -247,7 +260,13 @@ func report(cfg *config.Config, agents *agent.Set, skills *skillreg.Registry, ad
 		fmt.Printf("  Discord       %s\n", state)
 	}
 
-	for _, e := range agents.Errors() {
+	// 移したことは黙って済ませない。次に開いたとき、名簿の名前が変わって
+	// いる理由がここにしか残らない。
+	for _, line := range team.Report(moved) {
+		fmt.Printf("  %s\n", line)
+	}
+
+	for _, e := range append(agents.Errors(), teamAgents.Errors()...) {
 		fmt.Printf("  ! エージェント %s: %s\n", e.Path, e.Reason)
 	}
 	for _, e := range skills.Errors() {

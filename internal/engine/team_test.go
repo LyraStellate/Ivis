@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -102,7 +103,7 @@ func TestRoundRunsTurnsInOrder(t *testing.T) {
 		}
 		return done()
 	}))
-	if err := f.eng.Run(context.Background(), sess.ID, "やって", f.emit); err != nil {
+	if err := f.eng.Run(context.Background(), sess.ID, "@lead やって", f.emit); err != nil {
 		t.Fatal(err)
 	}
 
@@ -117,29 +118,68 @@ func TestRoundRunsTurnsInOrder(t *testing.T) {
 	}
 }
 
-// 宛先の解決。@ で指した相手へ、無ければ窓口へ。宛先の記述は本文に残さない。
+// 宛先は利用者が名指しする。書いた宛先は本文に残さない。
 func TestMentionRouting(t *testing.T) {
-	for _, c := range []struct{ text, want, body string }{
-		{"@hand これを頼む", "hand", "これを頼む"},
-		{"宛先なし", "lead", "宛先なし"},
-		{"@* 誰か", "lead", "誰か"},
-	} {
-		f, sess := teamFixture(t, byMember(func(self string, nth int) []provider.Event {
-			return done()
-		}))
-		if err := f.eng.Run(context.Background(), sess.ID, c.text, f.emit); err != nil {
-			t.Fatal(err)
+	f, sess := teamFixture(t, byMember(func(self string, nth int) []provider.Event {
+		return done()
+	}))
+	if err := f.eng.Run(context.Background(), sess.ID, "@hand これを頼む", f.emit); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(f.turns(), ","); got != "hand" {
+		t.Errorf("宛先 = %s, want hand", got)
+	}
+	msgs, _ := f.store.ListMessages(context.Background(), sess.ID)
+	if msgs[0].Content != "これを頼む" {
+		t.Errorf("保存 = %q (宛先の記述が残っている)", msgs[0].Content)
+	}
+	if msgs[0].ToAgentID != "hand" {
+		t.Errorf("宛先の記録 = %q", msgs[0].ToAgentID)
+	}
+}
+
+// 宛先を書かずに送ったら断る。ここで誰かを選ぶと、それは窓口を別の名前で
+// 復活させたことになる (#640275)。
+func TestNoAddresseeIsRefused(t *testing.T) {
+	f, sess := teamFixture(t, byMember(func(self string, nth int) []provider.Event {
+		return done()
+	}))
+	err := f.eng.Run(context.Background(), sess.ID, "誰かやって", f.emit)
+	if err == nil {
+		t.Fatal("宛先なしで通ってしまう")
+	}
+	if !errors.Is(err, ErrNoAddressee) {
+		t.Errorf("種類が違う: %v", err)
+	}
+	// 誰に頼めるのかを添える。添えないと、次に何を打てばよいか分からない。
+	for _, want := range []string{"lead", "hand", "scout"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("名簿が添えられていない: %v", err)
 		}
-		if got := strings.Join(f.turns(), ","); got != c.want {
-			t.Errorf("%q の宛先 = %s, want %s", c.text, got, c.want)
-		}
-		msgs, _ := f.store.ListMessages(context.Background(), sess.ID)
-		if msgs[0].Content != c.body {
-			t.Errorf("%q の保存 = %q, want %q", c.text, msgs[0].Content, c.body)
-		}
-		if msgs[0].ToAgentID != c.want {
-			t.Errorf("%q の宛先の記録 = %q", c.text, msgs[0].ToAgentID)
-		}
+	}
+	if len(f.turns()) != 0 {
+		t.Error("断ったのに手番が始まっている")
+	}
+	// 断る位置は保存の前。保存してから断ると、宛先の無い発言が履歴に溜まる。
+	msgs, _ := f.store.ListMessages(context.Background(), sess.ID)
+	if len(msgs) != 0 {
+		t.Errorf("断ったのに保存されている: %d 件", len(msgs))
+	}
+}
+
+// 名簿が 1 人なら迷う余地が無い。書かせる理由も無い。
+func TestSoloTeamNeedsNoAddressee(t *testing.T) {
+	f, sess := teamFixture(t, byMember(func(self string, nth int) []provider.Event {
+		return done()
+	}))
+	if err := f.store.SetMembers(context.Background(), sess.ID, []string{"hand"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.eng.Run(context.Background(), sess.ID, "やって", f.emit); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(f.turns(), ","); got != "hand" {
+		t.Errorf("宛先 = %s, want hand", got)
 	}
 }
 
@@ -211,7 +251,7 @@ func TestRemovedMemberIsSkipped(t *testing.T) {
 			_ = f.store.SetMembers(context.Background(), sess.ID, []string{"lead", "hand"})
 		}
 	}
-	if err := f.eng.Run(context.Background(), sess.ID, "やって", emit); err != nil {
+	if err := f.eng.Run(context.Background(), sess.ID, "@lead やって", emit); err != nil {
 		t.Fatal(err)
 	}
 	if got := strings.Join(f.turns(), ","); got != "lead" {
@@ -239,7 +279,7 @@ func TestOneFailureDoesNotStopRound(t *testing.T) {
 		}
 		return done()
 	}))
-	if err := f.eng.Run(context.Background(), sess.ID, "やって", f.emit); err != nil {
+	if err := f.eng.Run(context.Background(), sess.ID, "@lead やって", f.emit); err != nil {
 		t.Fatal(err)
 	}
 	// lead → hand (失敗) → lead (失敗の報告) と回る。
@@ -262,7 +302,7 @@ func TestTurnInputIsScopedToSelf(t *testing.T) {
 		}
 		return done()
 	}))
-	if err := f.eng.Run(context.Background(), sess.ID, "秘密の依頼", f.emit); err != nil {
+	if err := f.eng.Run(context.Background(), sess.ID, "@lead 秘密の依頼", f.emit); err != nil {
 		t.Fatal(err)
 	}
 
@@ -302,11 +342,11 @@ func TestTeamSystemPrompt(t *testing.T) {
 	f, sess := teamFixture(t, byMember(func(self string, nth int) []provider.Event {
 		return done()
 	}))
-	if err := f.eng.Run(context.Background(), sess.ID, "やって", f.emit); err != nil {
+	if err := f.eng.Run(context.Background(), sess.ID, "@lead やって", f.emit); err != nil {
 		t.Fatal(err)
 	}
 	sys := f.mock.reqs[0].Messages[0].Content
-	for _, want := range []string{"hand", "指示 ができます", "窓口は lead", "チームでの進め方"} {
+	for _, want := range []string{"hand", "指示 ができます", "名指し", "チームでの進め方"} {
 		if !strings.Contains(sys, want) {
 			t.Errorf("指示文に %q が無い", want)
 		}
@@ -326,7 +366,7 @@ func TestDelegateIsNotOfferedInTeam(t *testing.T) {
 	f, sess := teamFixture(t, byMember(func(self string, nth int) []provider.Event {
 		return done()
 	}))
-	if err := f.eng.Run(context.Background(), sess.ID, "やって", f.emit); err != nil {
+	if err := f.eng.Run(context.Background(), sess.ID, "@lead やって", f.emit); err != nil {
 		t.Fatal(err)
 	}
 	for _, d := range f.mock.reqs[0].Tools {
@@ -357,7 +397,7 @@ func TestOwnTicketsAppearInPrompt(t *testing.T) {
 		Title: "hand の仕事", Assignee: "hand"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.eng.Run(ctx, sess.ID, "やって", f.emit); err != nil {
+	if err := f.eng.Run(ctx, sess.ID, "@lead やって", f.emit); err != nil {
 		t.Fatal(err)
 	}
 	sys := f.mock.reqs[0].Messages[0].Content
@@ -421,7 +461,7 @@ func TestSilentTurnIsAnsweredForYou(t *testing.T) {
 		}
 		return done()
 	}))
-	if err := f.eng.Run(context.Background(), sess.ID, "やって", f.emit); err != nil {
+	if err := f.eng.Run(context.Background(), sess.ID, "@lead やって", f.emit); err != nil {
 		t.Fatal(err)
 	}
 
@@ -474,7 +514,7 @@ func TestEmptyTurnStillAnswers(t *testing.T) {
 		}
 		return done()
 	}))
-	if err := f.eng.Run(context.Background(), sess.ID, "やって", f.emit); err != nil {
+	if err := f.eng.Run(context.Background(), sess.ID, "@lead やって", f.emit); err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range f.events {
@@ -497,7 +537,7 @@ func TestFillInDoesNotChain(t *testing.T) {
 		// 誰も何も送らない。
 		return []provider.Event{text("……"), {Type: provider.EventDone}}
 	}))
-	if err := f.eng.Run(context.Background(), sess.ID, "やって", f.emit); err != nil {
+	if err := f.eng.Run(context.Background(), sess.ID, "@lead やって", f.emit); err != nil {
 		t.Fatal(err)
 	}
 	// lead → hand → (繕い) → lead で終わる。lead が受けた繕いをさらに
@@ -521,7 +561,7 @@ func TestFailureIsAnsweredOnce(t *testing.T) {
 		}
 		return done()
 	}))
-	if err := f.eng.Run(context.Background(), sess.ID, "やって", f.emit); err != nil {
+	if err := f.eng.Run(context.Background(), sess.ID, "@lead やって", f.emit); err != nil {
 		t.Fatal(err)
 	}
 	var n int
@@ -546,7 +586,7 @@ func TestPromptTellsLeadersToInstruct(t *testing.T) {
 		}
 		return done()
 	}))
-	if err := f.eng.Run(context.Background(), sess.ID, "やって", f.emit); err != nil {
+	if err := f.eng.Run(context.Background(), sess.ID, "@lead やって", f.emit); err != nil {
 		t.Fatal(err)
 	}
 
@@ -581,7 +621,7 @@ func TestSilentTurnIsNudgedOnce(t *testing.T) {
 		}
 		return done()
 	}))
-	if err := f.eng.Run(context.Background(), sess.ID, "作って", f.emit); err != nil {
+	if err := f.eng.Run(context.Background(), sess.ID, "@lead 作って", f.emit); err != nil {
 		t.Fatal(err)
 	}
 
@@ -648,7 +688,7 @@ func TestSendingTurnIsNotNudged(t *testing.T) {
 		}
 		return done()
 	}))
-	if err := f.eng.Run(context.Background(), sess.ID, "作って", f.emit); err != nil {
+	if err := f.eng.Run(context.Background(), sess.ID, "@lead 作って", f.emit); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(inputOf(f, "lead"), "まだ誰にもメッセージを送っていません") {
@@ -662,7 +702,7 @@ func TestSilentLeadTellsTheUser(t *testing.T) {
 	f, sess := teamFixture(t, byMember(func(self string, nth int) []provider.Event {
 		return []provider.Event{text("考えています"), {Type: provider.EventDone}}
 	}))
-	if err := f.eng.Run(context.Background(), sess.ID, "作って", f.emit); err != nil {
+	if err := f.eng.Run(context.Background(), sess.ID, "@lead 作って", f.emit); err != nil {
 		t.Fatal(err)
 	}
 	var notice string
@@ -684,7 +724,7 @@ func TestSilentWorkerIsQuiet(t *testing.T) {
 		}
 		return done()
 	}))
-	if err := f.eng.Run(context.Background(), sess.ID, "作って", f.emit); err != nil {
+	if err := f.eng.Run(context.Background(), sess.ID, "@lead 作って", f.emit); err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range f.events {
@@ -707,7 +747,7 @@ func TestTicketToolsAnnounceChange(t *testing.T) {
 		}
 		return done()
 	}))
-	if err := f.eng.Run(context.Background(), sess.ID, "やって", f.emit); err != nil {
+	if err := f.eng.Run(context.Background(), sess.ID, "@lead やって", f.emit); err != nil {
 		t.Fatal(err)
 	}
 
@@ -738,7 +778,7 @@ func TestFailedTicketToolIsNotAnnounced(t *testing.T) {
 		}
 		return done()
 	}))
-	if err := f.eng.Run(context.Background(), sess.ID, "やって", f.emit); err != nil {
+	if err := f.eng.Run(context.Background(), sess.ID, "@lead やって", f.emit); err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range f.events {
