@@ -56,6 +56,7 @@
         script_timeout_sec: cfg.script_timeout_sec,
         command_timeout_sec: cfg.command_timeout_sec,
         idle_timeout_sec: cfg.idle_timeout_sec,
+        probe_timeout_sec: cfg.probe_timeout_sec,
         require_approval: cfg.require_approval,
         auto_approve: cfg.auto_approve ?? [],
         search_backend: cfg.search_backend,
@@ -298,6 +299,10 @@
                  いる間ではなく、通路が死んでいる間に伸びる。 -->
             <label>無応答の上限(秒)
               <input type="number" bind:value={cfg.idle_timeout_sec} /></label>
+            <!-- 生きているかを尋ねるだけの要求。短すぎると、VPN 越しの
+                 動いている相手を落ちていると判じる。 -->
+            <label>接続の確認の待ち時間(秒)
+              <input type="number" bind:value={cfg.probe_timeout_sec} /></label>
           </div>
         </fieldset>
 
@@ -423,7 +428,7 @@
     gap: 7px;
     color: var(--fg);
   }
-  label.check input { width: auto; margin: 0; }
+  label.check input { margin: 0; }
   .nums {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));

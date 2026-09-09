@@ -453,6 +453,9 @@
     grid-template-columns: 1fr 1fr;
     gap: 0 10px;
   }
+  /* 子に min-width: 0 が無いと、モデルの選択肢のいちばん長い名前が列の
+     下限になり、編集欄ごと横へはみ出す。 */
+  .row2 > label { min-width: 0; }
   label {
     display: block;
     margin-bottom: 9px;
@@ -475,7 +478,6 @@
     color: var(--fg);
   }
   label.check input {
-    width: auto;
     margin: 0;
   }
   textarea {

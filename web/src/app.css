@@ -62,6 +62,10 @@
   --border: var(--g6);
   --border-strong: var(--g7);
   --border-hover: var(--g8);
+  /* 面の中を仕切る細い線。面と面の境目 (--border) より弱い。
+     定義を忘れていたあいだ、これを使っていた 7 か所の border-color は
+     currentColor へ落ち、本文色の明るい線として出ていた。 */
+  --line: var(--g5);
   --ring: var(--accent-line);
   --glyph: var(--g9);
   --fg: var(--g12);
@@ -179,6 +183,17 @@ input, select, textarea {
   border-radius: var(--radius);
   padding: 4px 7px;
   width: 100%;
+  /* 内在の最小幅を外す。外さないと、選択肢のいちばん長いモデル名が
+     グリッドの列を押し広げ、囲みごとはみ出す。 */
+  min-width: 0;
+}
+
+/* 印を付けるだけのものは幅いっぱいにしない。上の width: 100% がそのまま
+   効くと、四角が横いっぱいに伸びて添えた文字を押し出す。部品ごとに
+   打ち消して回ると、次に足した部品でまた忘れる。 */
+input[type="checkbox"], input[type="radio"] {
+  width: auto;
+  min-width: 0;
 }
 input:hover, select:hover, textarea:hover { border-color: var(--border-hover); }
 input::placeholder, textarea::placeholder { color: var(--g9); }

@@ -232,6 +232,7 @@
     display: grid;
     gap: 3px;
     margin-bottom: 8px;
+    min-width: 0;
   }
   .f span {
     color: var(--fg-dim);
@@ -240,12 +241,15 @@
   .wide { display: grid; }
   .bad { border-color: var(--danger-border); }
 
+  /* 1fr は minmax(auto, 1fr) なので、子に min-width: 0 が無いと、折り返せない
+     ツール名の長さが列の下限になる。囲みが狭いときにそこからはみ出す。 */
   .picks {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 12px;
     margin-bottom: 10px;
   }
+  .picks > div { min-width: 0; }
   .cap {
     margin: 0 0 4px;
     color: var(--fg-dim);
@@ -259,10 +263,15 @@
     overflow-y: auto;
   }
   .chips button {
+    max-width: 100%;
     padding: 1px 7px;
     border-radius: 999px;
     font-size: 11px;
     color: var(--fg-dim);
+    /* 長いツール名でも列の幅に収める。切れても、何の札かは頭で分かる。 */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .chips button.on {
     border-color: var(--accent-line);
