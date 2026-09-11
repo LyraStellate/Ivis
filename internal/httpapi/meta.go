@@ -170,6 +170,9 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		ContextTokens      int      `json:"context_tokens"`
 		ScriptIdleSec      int      `json:"script_idle_sec"`
 		CommandIdleSec     int      `json:"command_idle_sec"`
+		IdleTimeoutSec     int      `json:"idle_timeout_sec"`
+		ProbeTimeoutSec    int      `json:"probe_timeout_sec"`
+		HeadTimeoutSec     int      `json:"head_timeout_sec"`
 		RequireApproval    *bool    `json:"require_approval"`
 		AutoApprove        []string `json:"auto_approve"`
 		SearchBackend      string   `json:"search_backend"`
@@ -221,6 +224,17 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.CommandIdleSec > 0 {
 		s.cfg.CommandIdleSec = in.CommandIdleSec
+	}
+	// 提供元への見張りは、画面から送られていたのに読み捨てられていた。
+	// 変えても保存されず、開き直すと元へ戻る形になっていた。
+	if in.IdleTimeoutSec > 0 {
+		s.cfg.IdleTimeoutSec = in.IdleTimeoutSec
+	}
+	if in.ProbeTimeoutSec > 0 {
+		s.cfg.ProbeTimeoutSec = in.ProbeTimeoutSec
+	}
+	if in.HeadTimeoutSec > 0 {
+		s.cfg.HeadTimeoutSec = in.HeadTimeoutSec
 	}
 	if in.RequireApproval != nil {
 		s.cfg.RequireApproval = *in.RequireApproval
