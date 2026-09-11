@@ -12,6 +12,7 @@
   // 注記が読めないためである。
   import * as api from './api.js'
   import Confirm from './Confirm.svelte'
+  import FlowMap from './FlowMap.svelte'
   import MemberEditor from './MemberEditor.svelte'
   import TicketDetail from './TicketDetail.svelte'
   import { whoColor } from './who.js'
@@ -20,6 +21,7 @@
     sessionId,
     roster,
     tickets,
+    flow = null,
     models = [],
     colorOf,
     onRoster,
@@ -86,7 +88,10 @@
 
   // 終了は既定で出さない。終わった仕事が並ぶと、残っているものが埋もれる。
   let showClosed = $state(false)
-  let open = $state({ members: true, common: true, team: true, tickets: true })
+  let open = $state({ members: true, common: true, team: true, tickets: true, flow: true })
+  // 「最新へ」のために FlowMap を掴む。読むのは押されたときだけだが、
+  // 束ねずに置くと Svelte が非反応の書き換えとして警告する。
+  let map = $state(null)
   let editing = $state(null)
   let pendingDelete = $state(null)
   let detail = $state(null)
@@ -118,6 +123,9 @@
     }))
   })
 
+  // 返事の返っていない矢印の数。欄の見出しに出す — 折りたたんでいても
+  // 待っているものがあるかどうかは分かるようにする。
+  const waiting = $derived((flow?.arrows ?? []).filter((a) => a.open).length)
   const shown = $derived(columns.reduce((n, c) => n + c.items.length, 0))
 
   // 状態と優先度の並びはサーバーが決める。画面に書き写すと、増やしたときに
@@ -309,7 +317,7 @@
     {/if}
   </section>
 
-  <section class="grow">
+  <section>
     <button class="head" onclick={() => (open.tickets = !open.tickets)} aria-expanded={open.tickets}>
       <span class="caret" class:on={open.tickets}></span>チケット
       <span class="n">{shown}</span>
@@ -373,6 +381,24 @@
           {/each}
         </div>
       {/if}
+    {/if}
+  </section>
+
+  <!-- 連絡の記録 (#512740)。チケットが「何の仕事がどこまで進んだか」を持つ
+       のに対し、こちらは「誰が誰に何を頼み、それが返ってきたか」を持つ。 -->
+  <section class="grow">
+    <button class="head" onclick={() => (open.flow = !open.flow)} aria-expanded={open.flow}>
+      <span class="caret" class:on={open.flow}></span>流れ図
+      <span class="n">{waiting}</span>
+    </button>
+    {#if open.flow}
+      <p class="lede">
+        列がターン、行がエージェントです。左から右へ流れます。濃い矢印が返事待ちで、升を押すとそのターンのやり取りが出ます。掴むと横へ動きます。
+      </p>
+      <div class="tools">
+        <button class="add" onclick={() => map?.latest()}>最新へ</button>
+      </div>
+      <FlowMap bind:this={map} {flow} {colorOf} />
     {/if}
   </section>
 

@@ -443,13 +443,14 @@ describe('右パネルの名簿', () => {
     document.body.innerHTML = ''
   })
 
-  it('欄は メンバー / 共通 / チーム / チケット の 4 つ', () => {
+  it('欄は メンバー / 共通 / チーム / チケット / 流れ図 の 5 つ', () => {
     const { target, app } = render()
     expect(heads(target)).toEqual([
       'この会話のメンバー',
       '共通エージェント',
       'チームエージェント',
       'チケット',
+      '流れ図',
     ])
     unmount(app)
   })

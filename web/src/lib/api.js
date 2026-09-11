@@ -49,6 +49,10 @@ export const cancelRun = (id) => fetch(`/api/sessions/${id}/cancel`, json('POST'
 // チームの名簿 (#731906)。参加中のメンバーと、参加していない共通エージェントを
 // 1 度で返す。2 回に分けると、片方だけ古い一覧を描く瞬間が生まれる。
 export const getRoster = (id) => fetch(`/api/sessions/${id}/agents`).then(unwrap)
+// 連絡の記録 (#512740)。誰が誰に何を頼み、何が返っていないか。組み立ては
+// サーバー側の 1 か所に置いてある — 画面と指示文が同じものを二度組み立てると、
+// 食い違ったときにどちらが正か決められない。
+export const getFlow = (id) => fetch(`/api/sessions/${id}/flow`).then(unwrap)
 export const enableMember = (id, agent_id, join) =>
   fetch(`/api/sessions/${id}/members`, json('POST', { agent_id, join })).then(unwrap)
 // 作成とコピーは会話の下にある。定義を作るのと、この会話で有効にするのを

@@ -59,6 +59,9 @@
   // からである (#189542)。
   let roster = $state(null)
   let tickets = $state([])
+  // 連絡の記録 (#512740)。矢印そのものは会話の記録に乗っているので、ここは
+  // 描くための組み立て済みの写しである。
+  let flow = $state(null)
   let models = $state([])
   let panelHidden = $state(false)
 
@@ -143,16 +146,18 @@
     if (session?.running && runningId == null) follow(id)
   }
 
-  // 名簿とチケットを取り直す。会話をまたいで持ち越さないよう、いま開いて
-  // いる会話のものだけを反映する。
+  // 名簿・チケット・流れ図を取り直す。会話をまたいで持ち越さないよう、いま
+  // 開いている会話のものだけを反映する。
   async function loadTeam(id) {
-    const [r, t] = await Promise.all([
+    const [r, t, g] = await Promise.all([
       guard(() => api.getRoster(id)),
       guard(() => api.listTickets(id, { closed: true })),
+      guard(() => api.getFlow(id)),
     ])
     if (currentId !== id) return
     if (r) roster = r
     if (t) tickets = t
+    if (g) flow = g
     if (models.length === 0) models = (await guard(api.listModels)) ?? []
   }
 
@@ -160,6 +165,12 @@
     if (!currentId || !isTeam) return
     const t = await guard(() => api.listTickets(currentId, { closed: true }))
     if (t) tickets = t
+  }
+
+  async function refreshFlow() {
+    if (!currentId || !isTeam) return
+    const g = await guard(() => api.getFlow(currentId))
+    if (g) flow = g
   }
 
   async function newSession(agentId, kind) {
@@ -286,6 +297,9 @@
         // 載せてもらう形にすると、同じものを 2 つの経路で組み立てることに
         // なり、食い違ったときにどちらが正か決められない。
         if (ev.type === 'changed' && ev.text === 'tickets') refreshTickets()
+        // 矢印が 1 本増えたか、閉じたか。どちらも team_message で起きる。
+        // 専用の知らせを足さないのは、既にこれが流れているからである。
+        if (ev.type === 'team_message') refreshFlow()
         tx.apply(ev)
       }
     } catch (e) {
@@ -312,6 +326,7 @@
         if (history) tx.loadHistory(history)
         usage = usageOf(session)
         await refreshTickets()
+        await refreshFlow()
       }
       detached = false
     }
@@ -486,6 +501,7 @@
       {tickets}
       {models}
       {colorOf}
+      {flow}
       onRoster={(r) => (roster = r)}
       onTickets={refreshTickets}
       width={panelWidth}
