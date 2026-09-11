@@ -26,8 +26,9 @@ func teamFixture(t *testing.T, script func(n int, req provider.Request) []provid
 			// 届いた要求から誰の手番かが分かる。
 			"instructions": a.id,
 			"tier":         a.tier,
-			"tools":        []string{"send_message", "list_dir", "list_tickets", "create_ticket", "update_ticket"},
-			"skills":       []string{},
+			"tools": []string{"send_message", "list_dir", "list_tickets",
+				"create_ticket", "update_ticket", "delete_ticket"},
+			"skills": []string{},
 		})
 	}
 	f.reload()
@@ -766,6 +767,66 @@ func TestTicketToolsAnnounceChange(t *testing.T) {
 		if e.Type == EvtChanged && (e.Result != "" || e.Args != nil) {
 			t.Error("知らせに中身が載っている")
 		}
+	}
+}
+
+// 消すのはモデルにも許す。ただし消えたことが誰にも見えないままにしない —
+// 番号と題を知らせとして会話に残す (#189542)。
+func TestModelCanDeleteATicket(t *testing.T) {
+	f, sess := teamFixture(t, byMember(func(self string, nth int) []provider.Event {
+		if self != "lead" {
+			return done()
+		}
+		switch nth {
+		case 0:
+			return []provider.Event{callTool("create_ticket",
+				map[string]any{"title": "要らなくなる仕事", "body": "確認用"})}
+		case 1:
+			return []provider.Event{callTool("delete_ticket", map[string]any{"number": 1})}
+		}
+		return done()
+	}))
+	ctx := context.Background()
+	if err := f.eng.Run(ctx, sess.ID, "@lead 片付けて", f.emit); err != nil {
+		t.Fatal(err)
+	}
+
+	// 承認を挟まない。ほかのチケットの操作と揃える。
+	for _, e := range f.events {
+		if e.Type == EvtApproval {
+			t.Errorf("承認を求めている: %v", e.Tool)
+		}
+	}
+	list, err := f.store.ListTickets(ctx, sess.ID, store.TicketFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("消えていない: %v", list)
+	}
+
+	// 何が消えたのかが会話に残ること。番号だけでは、後から見て何の仕事か
+	// 分からない。
+	var notice string
+	for _, e := range f.events {
+		if e.Type == EvtNotice && strings.Contains(e.Text, "消しました") {
+			notice = e.Text
+		}
+	}
+	for _, want := range []string{"#1", "要らなくなる仕事", "lead"} {
+		if !strings.Contains(notice, want) {
+			t.Errorf("知らせに %q がありません: %q", want, notice)
+		}
+	}
+	// 一覧が古くなったことも流れる。
+	seen := false
+	for _, e := range f.events {
+		if e.Type == EvtChanged && e.Text == "tickets" {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Error("一覧が古くなったことを流していない")
 	}
 }
 
