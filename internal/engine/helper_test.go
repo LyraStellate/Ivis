@@ -164,7 +164,7 @@ func newFixture(t *testing.T, script func(n int, req provider.Request) []provide
 	cfg.WorkspaceDir = work
 	cfg.MaxIterations = 4
 	cfg.MaxDelegationDepth = 2
-	cfg.ScriptTimeoutSec = 5
+	cfg.ScriptIdleSec = 5
 	cfg.RequireApproval = false
 
 	mock := &mockProvider{script: script}

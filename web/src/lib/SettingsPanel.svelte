@@ -53,8 +53,8 @@
         max_iterations: cfg.max_iterations,
         context_tokens: cfg.context_tokens,
         max_delegation_depth: cfg.max_delegation_depth,
-        script_timeout_sec: cfg.script_timeout_sec,
-        command_timeout_sec: cfg.command_timeout_sec,
+        script_idle_sec: cfg.script_idle_sec,
+        command_idle_sec: cfg.command_idle_sec,
         idle_timeout_sec: cfg.idle_timeout_sec,
         probe_timeout_sec: cfg.probe_timeout_sec,
         head_timeout_sec: cfg.head_timeout_sec,
@@ -291,10 +291,14 @@
               <input type="number" bind:value={cfg.context_tokens} /></label>
             <label>委譲の深さの上限
               <input type="number" bind:value={cfg.max_delegation_depth} /></label>
-            <label>スクリプトの実行時間の上限(秒)
-              <input type="number" bind:value={cfg.script_timeout_sec} /></label>
-            <label>コマンドの実行時間の上限(秒)
-              <input type="number" bind:value={cfg.command_timeout_sec} /></label>
+            <!-- 実行そのものに時間の上限は置かない。時間で切ると、正しく
+                 進んでいる長い仕事まで止まる。上限を置くのは「動いていない
+                 時間」で、出力が届いたことと、木全体の仕事量 (CPU・I/O) が
+                 進んだことの両方で数え直す。 -->
+            <label>コマンドの無音の上限(秒)
+              <input type="number" bind:value={cfg.command_idle_sec} /></label>
+            <label>スクリプトの無音の上限(秒)
+              <input type="number" bind:value={cfg.script_idle_sec} /></label>
             <!-- 生成そのものに上限は置かない。時間で切ると長い仕事ができない。
                  上限を置くのは「何も届かない時間」で、これはモデルが考えて
                  いる間ではなく、通路が死んでいる間に伸びる。 -->

@@ -49,30 +49,55 @@ func (t *runCommandTool) Execute(ctx context.Context, ec *ExecContext, args map[
 		}
 	}
 
-	timeout := ec.CommandTimeout
-	if timeout <= 0 {
-		timeout = 2 * time.Minute
+	idle := ec.CommandIdle
+	if idle <= 0 {
+		idle = 2 * time.Minute
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	// 実行そのものに時間の上限は置かない。見張るのは動いていない時間だけで、
+	// それは出力と木の仕事量の両方で数え直す (watch.go)。
+	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	w := newWatch(idle, cancel)
+	defer w.stop()
+
+	trk := newTracker()
+	defer trk.close()
 
 	name, flag := shell()
-	cmd := exec.CommandContext(ctx, name, flag, line)
+	cmd := exec.CommandContext(runCtx, name, flag, line)
 	setShellLine(cmd, line)
+	setGroup(cmd)
 	cmd.Dir = dir
+	// 止めるときは木ごと止める。シェルだけを殺すと、実際に仕事をしている
+	// ものが親を失って残り、出力の口を掴んだまま生き続ける。掴んだままだと
+	// 見張りが餌をもらい続けて、いつまでも打ち切れない。
+	cmd.Cancel = func() error {
+		trk.kill()
+		return nil
+	}
 	// 標準入力は必ず与える。何も繋がないと、入力を求めるコマンドが読める
 	// ものを持たないまま止まるか、読めないまま失敗する。空でも「これ以上
 	// 無い」と伝わる形にしておく。
 	cmd.Stdin = strings.NewReader(argStringOpt(args, "stdin"))
-	var out, errBuf bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &errBuf
-	// 上限に達したときに殺せるのはシェルだけで、その先で走っているものは
-	// 出力の口を掴んだまま残る。待ち続けると上限が効かないので、猶予を置いて
-	// 口を閉じ、そこまでの出力を持って戻る。
+	// 木ごと止めても、口を閉じるまでには間がある。猶予を置いて、そこまでの
+	// 出力を持って戻る。
 	cmd.WaitDelay = 2 * time.Second
 
-	runErr := cmd.Run()
+	// 出力を覗きながら溜める。覗くところで見張りを数え直し、同じ片を画面へ
+	// 流す — 見張りと流しは同じ 1 つの経路である。
+	live := newLiveOut(ec.Output)
+	defer live.close()
+	var out, errBuf bytes.Buffer
+	cmd.Stdout = &tap{to: &out, seen: w.seen, live: live}
+	cmd.Stderr = &tap{to: &errBuf, seen: w.seen, live: live}
+
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("実行できませんでした: %v", err)
+	}
+	trk.adopt(cmd)
+	go pollWork(runCtx, trk, w)
+	runErr := cmd.Wait()
+	w.stop()
 
 	// 出力はその環境のコードページで書かれていることがある。文字列にする
 	// 前に読み直す。
@@ -90,8 +115,15 @@ func (t *runCommandTool) Execute(ctx context.Context, ec *ExecContext, args map[
 
 	// 打ち切ったときも、そこまでの出力は返す。何も返さずに止めると、長く
 	// 走った末に何が起きていたのか分からない。
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return fmt.Sprintf("%s\n\n(%s で打ち切りました)", b.String(), timeout), nil
+	//
+	// 見張りが切ったのか利用者が中断したのかは、どちらも ctx の取り消しとして
+	// 届く。見分けて書き分けないと、中断したのに「止まっていた」と言うことに
+	// なる。
+	if w.expired() {
+		return b.String() + "\n\n" + stalled("コマンド", idle, "コマンドの無音の上限", w.blind.Load()), nil
+	}
+	if ctx.Err() != nil {
+		return b.String() + "\n\n(中断しました)", nil
 	}
 
 	// コマンドが失敗することは異常ではなく、モデルが読むべき結果である。

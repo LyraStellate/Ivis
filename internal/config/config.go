@@ -53,11 +53,21 @@ type Config struct {
 	// 埋まると古い側から黙って捨てられ、指示文ごと失われて応答が途中で終わる。
 	// エージェント定義の options に num_ctx があれば、そちらが優先される。
 	ContextTokens int `json:"context_tokens"`
-	// ScriptTimeoutSec はスキル同梱スクリプトの実行時間の上限 (秒)。
-	ScriptTimeoutSec int `json:"script_timeout_sec"`
-	// CommandTimeoutSec は run_command の実行時間の上限 (秒)。用途が違えば
-	// 妥当な長さも違うので、スクリプトの上限とは別に持つ。
-	CommandTimeoutSec int `json:"command_timeout_sec"`
+	// ScriptIdleSec と CommandIdleSec は、実行が動かないまま待つ上限 (秒)。
+	//
+	// 実行そのものには時間の上限を置かない。時間で切ると、正しく進んでいる
+	// 長い仕事まで止まる — npm install も go build も当たり前に数分かかり、
+	// 途中で切れば中途半端に入ったライブラリが残る。止めるべきなのは進んで
+	// いないときだけである (#470913)。
+	//
+	// 「動いている」は、出力が届いたことと、木全体の仕事量 (CPU 時間・I/O)
+	// が進んだことの両方で数え直す。だから、無言で計算し続けるビルドも、
+	// CPU をほとんど使わない取得も、動いているものとして扱われる。
+	//
+	// 用途が違えば妥当な長さも違うので、スクリプトとコマンドで別に持つ。
+	// 0 以下なら見張らない。
+	ScriptIdleSec  int `json:"script_idle_sec"`
+	CommandIdleSec int `json:"command_idle_sec"`
 	// IdleTimeoutSec は、提供元から何も届かないまま待つ上限 (秒)。
 	//
 	// 生成そのものに上限は置かない。時間で切ると長い仕事ができなくなる。
@@ -139,8 +149,8 @@ func Default() *Config {
 		MaxDelegationDepth: 3,
 		MaxTurns:           24,
 		ContextTokens:      16384,
-		ScriptTimeoutSec:   120,
-		CommandTimeoutSec:  120,
+		ScriptIdleSec:      120,
+		CommandIdleSec:     120,
 		IdleTimeoutSec:     300,
 		ProbeTimeoutSec:    10,
 		HeadTimeoutSec:     90,
@@ -340,8 +350,11 @@ func (c *Config) normalize() {
 	if c.ContextTokens <= 0 {
 		c.ContextTokens = d.ContextTokens
 	}
-	if c.ScriptTimeoutSec <= 0 {
-		c.ScriptTimeoutSec = d.ScriptTimeoutSec
+	if c.ScriptIdleSec < 0 {
+		c.ScriptIdleSec = 0
+	}
+	if c.ScriptIdleSec == 0 {
+		c.ScriptIdleSec = d.ScriptIdleSec
 	}
 	if c.IdleTimeoutSec < 0 {
 		c.IdleTimeoutSec = 0
@@ -358,8 +371,11 @@ func (c *Config) normalize() {
 	if c.ProbeTimeoutSec <= 0 {
 		c.ProbeTimeoutSec = d.ProbeTimeoutSec
 	}
-	if c.CommandTimeoutSec <= 0 {
-		c.CommandTimeoutSec = d.CommandTimeoutSec
+	if c.CommandIdleSec < 0 {
+		c.CommandIdleSec = 0
+	}
+	if c.CommandIdleSec == 0 {
+		c.CommandIdleSec = d.CommandIdleSec
 	}
 	if c.SearchBackend == "" {
 		c.SearchBackend = d.SearchBackend

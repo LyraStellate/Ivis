@@ -26,11 +26,18 @@ type ExecContext struct {
 	Confined bool
 	// Skills はスキルの参照先。
 	Skills *skillreg.Registry
-	// ScriptTimeout はスキル同梱スクリプトの実行時間の上限。
-	ScriptTimeout time.Duration
-	// CommandTimeout は run_command の実行時間の上限。用途が違えば妥当な
-	// 長さも違うので、スクリプトの上限とは別に持つ。
-	CommandTimeout time.Duration
+	// ScriptIdle と CommandIdle は、動かないまま待つ上限。
+	//
+	// 実行そのものには時間の上限を置かない。時間で切ると、正しく進んでいる
+	// 長い仕事まで止まる — npm install も go build も当たり前に数分かかり、
+	// 途中で切れば中途半端に入ったライブラリが残る。止めるべきなのは進んで
+	// いないときだけである (#470913)。
+	//
+	// 「動いている」は、出力が届いたことと、木全体の仕事量 (CPU 時間・I/O)
+	// が進んだことの両方で数え直す。用途が違えば妥当な長さも違うので、
+	// スクリプトとコマンドで別に持つ。
+	ScriptIdle  time.Duration
+	CommandIdle time.Duration
 	// Search は検索の取得元。設定されていなければ検索は使えない。
 	Search websearch.Searcher
 	// AgentID は呼び出し元のエージェント。
@@ -57,6 +64,12 @@ type ExecContext struct {
 	// 結果としてモデルへ返すだけで済ませないために要る。モデルにしか
 	// 見えない場所に書いても、消えたことは誰にも伝わらない。
 	Notice func(text string)
+	// Output は実行中の出力を画面へ流す。終わるまで何も見えないと、長く
+	// 走るものは止まっているのと区別が付かない (#470913)。
+	//
+	// 流すのは画面のためだけで、モデルへ渡す結果は Execute の戻り値が全部
+	// 持つ。nil のこともある (画面の無い経路)。
+	Output func(chunk string)
 }
 
 // Tool はモデルから呼べる 1 つの機能。

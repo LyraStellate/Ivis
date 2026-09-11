@@ -1,11 +1,13 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type loadSkillTool struct{}
@@ -73,19 +75,55 @@ func (t *runSkillScriptTool) Execute(ctx context.Context, ec *ExecContext, args 
 		return "", fmt.Errorf("スキル %q の外は実行できません: %w", skillName, err)
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, ec.ScriptTimeout)
+	idle := ec.ScriptIdle
+	if idle <= 0 {
+		idle = 2 * time.Minute
+	}
+	// コマンドと同じ扱いにする。実行そのものに時間の上限は置かず、動いて
+	// いない時間だけを見張る (watch.go)。
+	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	w := newWatch(idle, cancel)
+	defer w.stop()
+
+	trk := newTracker()
+	defer trk.close()
 
 	name, argv := interpreter(abs)
 	argv = append(argv, strings.Fields(argStringOpt(args, "args"))...)
 
-	cmd := exec.CommandContext(ctx, name, argv...)
+	cmd := exec.CommandContext(runCtx, name, argv...)
+	setGroup(cmd)
 	cmd.Dir = ec.Workspace
-	out, runErr := cmd.CombinedOutput()
+	cmd.Cancel = func() error {
+		trk.kill()
+		return nil
+	}
+	cmd.WaitDelay = 2 * time.Second
 
-	result := truncate(strings.TrimSpace(decodeConsole(out)), 32<<10)
+	live := newLiveOut(ec.Output)
+	defer live.close()
+	var buf bytes.Buffer
+	sink := &tap{to: &buf, seen: w.seen, live: live}
+	cmd.Stdout = sink
+	cmd.Stderr = sink
+
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("実行できませんでした: %v", err)
+	}
+	trk.adopt(cmd)
+	go pollWork(runCtx, trk, w)
+	runErr := cmd.Wait()
+	w.stop()
+
+	result := truncate(strings.TrimSpace(decodeConsole(buf.Bytes())), 32<<10)
+	// 打ち切りは失敗ではなく結果として返す。何も返さずに止めると、長く走った
+	// 末に何が起きていたのか分からない — run_command と揃える。
+	if w.expired() {
+		return result + "\n\n" + stalled("スクリプト", idle, "スクリプトの無音の上限", w.blind.Load()), nil
+	}
 	if ctx.Err() != nil {
-		return "", fmt.Errorf("スクリプトが %s を超えたため打ち切りました:\n%s", ec.ScriptTimeout, result)
+		return result + "\n\n(中断しました)", nil
 	}
 	if runErr != nil {
 		// 失敗もモデルにとっては情報である。こちらで打ち切らず、内容を返して

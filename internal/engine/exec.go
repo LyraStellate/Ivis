@@ -116,12 +116,12 @@ func (e *Engine) runOneTool(ctx context.Context, rc *runCtx, callID string, call
 		// 依頼の一部を担うのであり、成果物の置き場を分ける理由がない。
 		Workspace: e.Cfg.SessionWorkspace(rc.kind, rc.sessionID),
 		// 境界を課すかはエージェントの属性。委譲しても継承しない。
-		Confined:       !rc.agent.Unconfined,
-		CommandTimeout: time.Duration(e.Cfg.CommandTimeoutSec) * time.Second,
-		Search:         e.Search,
-		Skills:         e.Skills,
-		ScriptTimeout:  time.Duration(e.Cfg.ScriptTimeoutSec) * time.Second,
-		AgentID:        rc.agent.ID,
+		Confined:    !rc.agent.Unconfined,
+		CommandIdle: time.Duration(e.Cfg.CommandIdleSec) * time.Second,
+		Search:      e.Search,
+		Skills:      e.Skills,
+		ScriptIdle:  time.Duration(e.Cfg.ScriptIdleSec) * time.Second,
+		AgentID:     rc.agent.ID,
 		// 走らせたままのプロセスは会話ごとに束ねる。委譲された子も同じ会話で
 		// 走るので、親が起動したものを子から読める。
 		Session: rc.sessionID,

@@ -168,8 +168,8 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		MaxIterations      int      `json:"max_iterations"`
 		MaxDelegationDepth int      `json:"max_delegation_depth"`
 		ContextTokens      int      `json:"context_tokens"`
-		ScriptTimeoutSec   int      `json:"script_timeout_sec"`
-		CommandTimeoutSec  int      `json:"command_timeout_sec"`
+		ScriptIdleSec      int      `json:"script_idle_sec"`
+		CommandIdleSec     int      `json:"command_idle_sec"`
 		RequireApproval    *bool    `json:"require_approval"`
 		AutoApprove        []string `json:"auto_approve"`
 		SearchBackend      string   `json:"search_backend"`
@@ -216,11 +216,11 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	if in.ContextTokens > 0 {
 		s.cfg.ContextTokens = in.ContextTokens
 	}
-	if in.ScriptTimeoutSec > 0 {
-		s.cfg.ScriptTimeoutSec = in.ScriptTimeoutSec
+	if in.ScriptIdleSec > 0 {
+		s.cfg.ScriptIdleSec = in.ScriptIdleSec
 	}
-	if in.CommandTimeoutSec > 0 {
-		s.cfg.CommandTimeoutSec = in.CommandTimeoutSec
+	if in.CommandIdleSec > 0 {
+		s.cfg.CommandIdleSec = in.CommandIdleSec
 	}
 	if in.RequireApproval != nil {
 		s.cfg.RequireApproval = *in.RequireApproval
