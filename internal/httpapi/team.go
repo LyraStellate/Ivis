@@ -62,6 +62,24 @@ func (s *Server) handleRoster(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.rosterOf(sess))
 }
 
+// handleFlow は連絡の記録 (流れ図) を返す (#512740)。
+//
+// 図の組み立ては team.BuildFlow に置いてある。画面と指示文が同じものを二度
+// 組み立てると、食い違ったときにどちらが正か決められない。
+func (s *Server) handleFlow(w http.ResponseWriter, r *http.Request) {
+	sess, err := s.teamSession(r)
+	if err != nil {
+		writeError(w, statusFor(err), err)
+		return
+	}
+	edges, err := s.st.TeamFlow(r.Context(), sess.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, team.BuildFlow(team.Load(s.agents, s.teamAgents, sess), edges))
+}
+
 func (s *Server) rosterOf(sess *store.Session) rosterBody {
 	roster := team.Load(s.agents, s.teamAgents, sess)
 	body := rosterBody{Members: []memberBody{}, Available: []memberBody{}, Errors: roster.Errors}

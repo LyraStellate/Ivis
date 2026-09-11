@@ -23,6 +23,10 @@ import (
 // 呼び名であって、同時に走ることの約束ではない (#258413)。
 
 // turn は行列に積まれた 1 手番。
+//
+// 1 通が 1 手番である。同じ相手へ 2 通来れば、その相手は 2 回動く。頼んだ
+// 2 人それぞれに返事が返るためで、まとめて 1 回にすると片方が返事を受け
+// 取れない (#512740)。
 type turn struct {
 	// From は送り手。利用者からなら空。
 	From string
@@ -30,6 +34,11 @@ type turn struct {
 	Body string
 	Why  string
 	Did  string
+	// MsgID はこの 1 通の記録上の ID。応えたときに reply_to へ入れる。
+	MsgID string
+	// N は何ターンめか。種を 1 とし、そこから何本たどったかを数える。
+	// 図の列と同じ数え方で、画面の帯に出す (#512740)。
+	N int
 	// Rel は From から To への関係。依頼なら、返答に可否が要る。
 	Rel string
 	// auto はこの手番が、engine が繕った返信から始まったこと。繕いから
@@ -82,7 +91,7 @@ func (e *Engine) runTeam(ctx context.Context, sess *store.Session, userText stri
 	emit(Event{Type: EvtUserSaved, MessageID: userMsg.ID, AgentID: to})
 	e.maybeSetTitle(ctx, sess, body)
 
-	queue := []turn{{To: to, Body: body}}
+	queue := []turn{{To: to, Body: body, MsgID: userMsg.ID, N: 1}}
 	done := 0
 
 	for len(queue) > 0 {
@@ -99,6 +108,9 @@ func (e *Engine) runTeam(ctx context.Context, sess *store.Session, userText stri
 			return ctx.Err()
 		}
 
+		// 素の先入れ先出しは、そのまま幅優先である。あるターンで積まれた分は
+		// どれも、次のターンの分より前に出てくる — ターンという区切りを実行側
+		// が持つ必要はなく、行列に入れた順がそれを表している (#512740)。
 		t := queue[0]
 		queue = queue[1:]
 		done++
@@ -118,7 +130,7 @@ func (e *Engine) runTeam(ctx context.Context, sess *store.Session, userText stri
 		}
 
 		emit(Event{Type: EvtTurnStart, AgentID: m.ID, Text: t.From,
-			Relation: t.Rel, Queued: len(queue)})
+			Relation: t.Rel, Queued: len(queue), Turn: t.N})
 
 		sent, last, err := e.runTurn(ctx, sess, roster, m.ID, t, emit)
 		queue = append(queue, sent...)
@@ -194,7 +206,7 @@ func (e *Engine) fillIn(ctx context.Context, sess *store.Session, roster *team.R
 
 	next, err := e.saveTeamMessage(ctx, sess.ID, self, roster, tools.TeamMessage{
 		To: in.From, Why: why, Did: did, Body: body,
-	}, emit)
+	}, in.MsgID, in.N, emit)
 	if err != nil {
 		emit(Event{Type: EvtError, AgentID: self, Error: err.Error()})
 		return turn{}, false
@@ -240,7 +252,7 @@ func (e *Engine) runTurn(ctx context.Context, sess *store.Session, roster *team.
 		rc.requester = in.From
 	}
 	rc.send = func(ctx context.Context, msg tools.TeamMessage) error {
-		saved, err := e.saveTeamMessage(ctx, sess.ID, self, roster, msg, emit)
+		saved, err := e.saveTeamMessage(ctx, sess.ID, self, roster, msg, in.MsgID, in.N, emit)
 		if err != nil {
 			return err
 		}
@@ -290,7 +302,7 @@ const nudge = `いまの手番では、まだ誰にもメッセージを送っ�
 
 // saveTeamMessage は 1 通を記録し、画面へ流し、次の手番の形にして返す。
 func (e *Engine) saveTeamMessage(ctx context.Context, sessionID, from string,
-	roster *team.Roster, msg tools.TeamMessage, emit Emit) (turn, error) {
+	roster *team.Roster, msg tools.TeamMessage, replyTo string, n int, emit Emit) (turn, error) {
 	rel := roster.Relation(from, msg.To)
 	rec := &store.Message{
 		SessionID: sessionID,
@@ -301,6 +313,7 @@ func (e *Engine) saveTeamMessage(ctx context.Context, sessionID, from string,
 		Why:       msg.Why,
 		Did:       msg.Did,
 		Decision:  msg.Decision,
+		ReplyTo:   replyTo,
 	}
 	if err := e.Store.AppendMessage(ctx, rec); err != nil {
 		return turn{}, fmt.Errorf("メッセージを保存できませんでした: %w", err)
@@ -308,7 +321,8 @@ func (e *Engine) saveTeamMessage(ctx context.Context, sessionID, from string,
 	emit(Event{Type: EvtTeamMessage, MessageID: rec.ID, AgentID: rec.AgentID,
 		To: rec.ToAgentID, Text: rec.Content, Why: rec.Why, Did: rec.Did,
 		Decision: rec.Decision, Relation: rel})
-	return turn{From: from, To: msg.To, Body: msg.Body, Why: msg.Why, Did: msg.Did, Rel: rel}, nil
+	return turn{From: from, To: msg.To, Body: msg.Body, Why: msg.Why, Did: msg.Did,
+		Rel: rel, MsgID: rec.ID, N: n + 1}, nil
 }
 
 // toTeamMessages はそのメンバーの入力を組み立てる。
@@ -387,8 +401,25 @@ func (e *Engine) teamNote(ctx context.Context, rc *runCtx) string {
 	var b strings.Builder
 	b.WriteString(rc.roster.Roll(rc.agent.ID))
 	b.WriteString(team.Guide(rc.roster, rc.agent.ID))
+	b.WriteString(e.flowNote(ctx, rc))
 	b.WriteString(e.ticketNote(ctx, rc))
 	return b.String()
+}
+
+// flowNote は、いま返事の返っていないやり取りを載せる (#512740)。
+//
+// 既に頼んであることは、頼んだ本人の履歴の中にしか無い。圧縮で要約に畳まれる
+// と消え、そこで同じ相手へ同じことを重ねて頼むことになる。矢印は要約の外に
+// 残るので、ここから引き直せば畳まれても残る。
+//
+// チケットを持たないエージェントにも出す。連絡はチケットと独立に起きる。
+func (e *Engine) flowNote(ctx context.Context, rc *runCtx) string {
+	edges, err := e.Store.TeamFlow(ctx, rc.sessionID)
+	if err != nil {
+		// 図が引けないことは、その手番の仕事が失敗したことを意味しない。
+		return ""
+	}
+	return team.FlowNote(team.BuildFlow(rc.roster, edges), rc.agent.ID)
 }
 
 // ticketNote は自分が担当で終わっていないチケットを載せる。

@@ -97,7 +97,17 @@ type Message struct {
 	Why string `json:"why,omitempty"`
 	Did string `json:"did,omitempty"`
 	// Decision は依頼への返答のときだけ、受諾か却下か。
-	Decision  string    `json:"decision,omitempty"`
+	Decision string `json:"decision,omitempty"`
+	// ReplyTo は、この 1 通がどれに応えて送られたかを指す ID。
+	//
+	// 1 通が 1 手番であり、手番を始めさせるのは常に 1 通なので、1 つで足りる
+	// (#512740)。矢印が閉じているかは、これを指す行があるかで決まり、何ターン
+	// めかは、ここを何本たどれるかで決まる。
+	//
+	// 受信の側に「処理済み」の印を立てる形は採っていない。巻き戻しで応えた側の
+	// 発言が消えたとき、印だけが残って返事が来ているように見えるためである。
+	// こちら側に持たせておけば、その行が消えれば矢印は自然に開き直る。
+	ReplyTo   string    `json:"reply_to,omitempty"`
 	AgentID   string    `json:"agent_id"`
 	Model     string    `json:"model,omitempty"`
 	Error     string    `json:"error,omitempty"`
@@ -143,6 +153,7 @@ CREATE TABLE IF NOT EXISTS messages (
   why          TEXT NOT NULL DEFAULT '',
   did          TEXT NOT NULL DEFAULT '',
   decision     TEXT NOT NULL DEFAULT '',
+  reply_to     TEXT NOT NULL DEFAULT '',
   error        TEXT NOT NULL DEFAULT '',
   created_at   INTEGER NOT NULL
 );
@@ -174,6 +185,7 @@ var migrations = []string{
 	`ALTER TABLE messages ADD COLUMN why TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE messages ADD COLUMN did TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE messages ADD COLUMN decision TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE messages ADD COLUMN reply_to TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE tickets ADD COLUMN seq INTEGER NOT NULL DEFAULT 0`,
 	channelIndex,
 }
@@ -254,16 +266,16 @@ func (s *Store) createSession(ctx context.Context, agentID, title, source, chann
 		                       created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sess.ID, sess.Title, sess.AgentID, sess.Source, sess.ChannelID, sess.Kind,
-		encodeMembers(members), now.UnixMilli(), now.UnixMilli())
+		encodeIDs(members), now.UnixMilli(), now.UnixMilli())
 	if err != nil {
 		return nil, err
 	}
 	return sess, nil
 }
 
-// encodeMembers と decodeMembers は名簿の入出力。空の一覧は空文字にする。
+// encodeIDs と decodeIDs は名簿の入出力。空の一覧は空文字にする。
 // 空配列と空文字が混ざると、読み出すたびにどちらかへ畳む処理が要る。
-func encodeMembers(ids []string) string {
+func encodeIDs(ids []string) string {
 	if len(ids) == 0 {
 		return ""
 	}
@@ -274,7 +286,7 @@ func encodeMembers(ids []string) string {
 	return string(b)
 }
 
-func decodeMembers(raw string) []string {
+func decodeIDs(raw string) []string {
 	if raw == "" {
 		return nil
 	}
@@ -289,7 +301,7 @@ func decodeMembers(raw string) []string {
 func (s *Store) SetMembers(ctx context.Context, sessionID string, ids []string) error {
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE sessions SET members = ?, updated_at = ? WHERE id = ?`,
-		encodeMembers(ids), time.Now().UnixMilli(), sessionID)
+		encodeIDs(ids), time.Now().UnixMilli(), sessionID)
 	if err != nil {
 		return err
 	}
@@ -320,7 +332,7 @@ func (s *Store) ListSessions(ctx context.Context) ([]*Session, error) {
 			&sess.Kind, &members, &sess.ContextTokens, &sess.ContextLimit, &created, &updated); err != nil {
 			return nil, err
 		}
-		sess.Members = decodeMembers(members)
+		sess.Members = decodeIDs(members)
 		sess.CreatedAt = time.UnixMilli(created)
 		sess.UpdatedAt = time.UnixMilli(updated)
 		out = append(out, &sess)
@@ -356,7 +368,7 @@ func (s *Store) oneSession(ctx context.Context, where string, arg any) (*Session
 	if err != nil {
 		return nil, err
 	}
-	sess.Members = decodeMembers(members)
+	sess.Members = decodeIDs(members)
 	sess.CreatedAt = time.UnixMilli(created)
 	sess.UpdatedAt = time.UnixMilli(updated)
 	return &sess, nil
@@ -426,10 +438,10 @@ func (s *Store) AppendMessage(ctx context.Context, m *Message) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO messages (id, session_id, parent_id, seq, role, content, tool_calls,
 		                       tool_name, thinking, to_agent_id, why, did, decision,
-		                       agent_id, model, error, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                       reply_to, agent_id, model, error, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, m.SessionID, m.ParentID, m.Seq, m.Role, m.Content, calls, m.ToolName,
-		m.Thinking, m.ToAgentID, m.Why, m.Did, m.Decision,
+		m.Thinking, m.ToAgentID, m.Why, m.Did, m.Decision, m.ReplyTo,
 		m.AgentID, m.Model, m.Error, m.CreatedAt.UnixMilli())
 	if err != nil {
 		return err
@@ -458,7 +470,7 @@ func (s *Store) UpdateMessage(ctx context.Context, id, content, thinking, errTex
 
 const messageColumns = `id, session_id, parent_id, seq, role, content, tool_calls,
                         tool_name, thinking, to_agent_id, why, did, decision,
-                        agent_id, model, error, created_at`
+                        reply_to, agent_id, model, error, created_at`
 
 // ListMessages はセッションの全発言を連番順に返す。委譲の子も含む。
 // UI 側で parent_id により折りたたんで表示する。
@@ -530,7 +542,7 @@ func scanMessages(rows *sql.Rows) ([]*Message, error) {
 		var created int64
 		if err := rows.Scan(&m.ID, &m.SessionID, &m.ParentID, &m.Seq, &m.Role, &m.Content,
 			&calls, &m.ToolName, &m.Thinking, &m.ToAgentID, &m.Why, &m.Did, &m.Decision,
-			&m.AgentID, &m.Model, &m.Error, &created); err != nil {
+			&m.ReplyTo, &m.AgentID, &m.Model, &m.Error, &created); err != nil {
 			return nil, err
 		}
 		if calls != "" {

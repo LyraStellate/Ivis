@@ -109,7 +109,9 @@ func TestRoundRunsTurnsInOrder(t *testing.T) {
 	}
 
 	// hand と scout は何も返さずに終わるので、engine が代わりに lead へ
-	// 返す。その分だけ lead の手番が後ろに 2 つ増える。
+	// 返す。その分だけ lead の手番が後ろに 2 つ増える。1 通が 1 手番であり、
+	// 同じ相手へ 2 通来れば 2 回動く — 頼んだ 2 人それぞれに返事が要る
+	// からである (#512740)。
 	got := strings.Join(f.turns(), ",")
 	if got != "lead,hand,scout,lead,lead" {
 		t.Errorf("手番の順 = %s, want lead,hand,scout,lead,lead", got)

@@ -146,6 +146,9 @@ type Event struct {
 	// Queued は手番の行列に残っている数。何度も手番が入れ替わる間、画面には
 	// 長く何も届かないので、あと何人待っているかが唯一の手がかりになる。
 	Queued int `json:"queued,omitempty"`
+	// Turn は何ターンめの手番か。利用者の発言を 1 とし、そこから何本たどった
+	// かを数える。図の列と同じ数え方である (#512740)。
+	Turn int `json:"turn,omitempty"`
 }
 
 // reportedError は、その失敗が既にイベントとして流されたことを示す包み。

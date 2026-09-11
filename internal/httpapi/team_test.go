@@ -1,12 +1,16 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/LyraStellate/Ivis/internal/provider"
+	"github.com/LyraStellate/Ivis/internal/store"
 )
 
 // call は経路を通して 1 件叩き、状態と本文を返す。mux を通すのは、経路の
@@ -106,5 +110,48 @@ func TestRosterOnSeriesIsClientError(t *testing.T) {
 	code, _ := call(t, s, http.MethodGet, "/api/sessions/"+sess["id"].(string)+"/agents", "")
 	if code != http.StatusBadRequest {
 		t.Errorf("状態 = %d, want 400", code)
+	}
+}
+
+// 流れ図は名簿の箱と、記録された矢印を返す (#512740)。
+func TestFlowReturnsNodesAndArrows(t *testing.T) {
+	s, _, st := newServer(t)
+	id := newTeam(t, s)
+
+	// 利用者から general へ 1 通。まだ応えは無い。
+	user := &store.Message{SessionID: id, Role: provider.RoleUser,
+		Content: "認証を作って", ToAgentID: "general"}
+	if err := st.AppendMessage(context.Background(), user); err != nil {
+		t.Fatal(err)
+	}
+
+	code, body := call(t, s, http.MethodGet, "/api/sessions/"+id+"/flow", "")
+	if code != http.StatusOK {
+		t.Fatalf("状態 = %d %v", code, body)
+	}
+	// 箱は利用者と名簿の分。矢印が何本増えても、この数は変わらない。
+	if got := ids(body, "nodes"); len(got) != 2 || got[1] != "general" {
+		t.Errorf("節 = %v", got)
+	}
+	arrows := body["arrows"].([]any)
+	if len(arrows) != 1 {
+		t.Fatalf("矢印 = %v", arrows)
+	}
+	// 利用者からの矢印は未完了に数えない。名簿の外へは返せない。
+	if arrows[0].(map[string]any)["open"] == true {
+		t.Error("利用者からの矢印が返事待ちになっている")
+	}
+}
+
+// 直列の会話に流れ図は無い。
+func TestFlowRefusesSeriesSession(t *testing.T) {
+	s, _, _ := newServer(t)
+	code, body := call(t, s, http.MethodPost, "/api/sessions", `{"agent_id":"general"}`)
+	if code != http.StatusOK {
+		t.Fatal(body)
+	}
+	code, _ = call(t, s, http.MethodGet, "/api/sessions/"+body["id"].(string)+"/flow", "")
+	if code == http.StatusOK {
+		t.Error("直列の会話で流れ図が返っている")
 	}
 }

@@ -193,6 +193,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/sessions/{id}/agents", s.handleCreateTeamAgent)
 	mux.HandleFunc("POST /api/sessions/{id}/agents/copy", s.handleCopyAgent)
 	mux.HandleFunc("POST /api/sessions/{id}/members", s.handleEnable)
+	mux.HandleFunc("GET /api/sessions/{id}/flow", s.handleFlow)
 	mux.HandleFunc("PUT /api/team-agents/{id}", s.handleUpdateTeamAgent)
 	mux.HandleFunc("DELETE /api/team-agents/{id}", s.handleDeleteTeamAgent)
 
