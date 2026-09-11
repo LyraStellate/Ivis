@@ -57,6 +57,7 @@
         command_timeout_sec: cfg.command_timeout_sec,
         idle_timeout_sec: cfg.idle_timeout_sec,
         probe_timeout_sec: cfg.probe_timeout_sec,
+        head_timeout_sec: cfg.head_timeout_sec,
         require_approval: cfg.require_approval,
         auto_approve: cfg.auto_approve ?? [],
         search_backend: cfg.search_backend,
@@ -299,6 +300,11 @@
                  いる間ではなく、通路が死んでいる間に伸びる。 -->
             <label>無応答の上限(秒)
               <input type="number" bind:value={cfg.idle_timeout_sec} /></label>
+            <!-- 使い回している接続は黙って死んでいることがある。死んだ接続と
+                 考え込んでいる相手は区別できないので、この時間を過ぎたら
+                 張り直して送り直す。繋ぎ直した接続には掛けない。 -->
+            <label>接続を張り直すまで(秒)
+              <input type="number" bind:value={cfg.head_timeout_sec} /></label>
             <!-- 生きているかを尋ねるだけの要求。短すぎると、VPN 越しの
                  動いている相手を落ちていると判じる。 -->
             <label>接続の確認の待ち時間(秒)

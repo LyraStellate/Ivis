@@ -79,6 +79,7 @@ func run() error {
 		c := ollama.New(baseURL)
 		c.SetIdle(time.Duration(cfg.IdleTimeoutSec) * time.Second)
 		c.SetProbe(time.Duration(cfg.ProbeTimeoutSec) * time.Second)
+		c.SetHead(time.Duration(cfg.HeadTimeoutSec) * time.Second)
 		return c
 	}
 

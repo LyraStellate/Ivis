@@ -71,6 +71,16 @@ type Config struct {
 	// ほうがよい。ただし短すぎると、別の端末の Ollama を VPN 越しに使って
 	// いるときに、動いている相手を落ちていると判じてしまう。
 	ProbeTimeoutSec int `json:"probe_timeout_sec"`
+	// HeadTimeoutSec は、使い回した接続で応答の頭を待つ上限 (秒)。
+	//
+	// 使い回している接続は黙って死んでいることがある。死んだ接続と、考え込んで
+	// いる相手は区別できないので、この時間を過ぎたら接続を張り直して送り直す。
+	// 張り直しは接続 1 本ぶんの費用しかかからず、死んだ接続を待ち続けるのは
+	// IdleTimeoutSec を丸ごと捨てる。
+	//
+	// 繋ぎ直した接続には掛けない。そちらで頭が遅いのは、モデルの読み込みが
+	// 長いだけのことがある。0 以下なら掛けない。
+	HeadTimeoutSec int `json:"head_timeout_sec"`
 	// RequireApproval が false のとき、承認を必要とするツールを確認なしで実行する。
 	RequireApproval bool `json:"require_approval"`
 	// AutoApprove に載せたツールは、既定で確認を求めるものであっても
@@ -133,6 +143,7 @@ func Default() *Config {
 		CommandTimeoutSec:  120,
 		IdleTimeoutSec:     300,
 		ProbeTimeoutSec:    10,
+		HeadTimeoutSec:     90,
 		AutoApprove:        []string{},
 		SearchBackend:      websearch.Backends[0],
 		RequireApproval:    true,
@@ -337,6 +348,12 @@ func (c *Config) normalize() {
 	}
 	if c.IdleTimeoutSec == 0 {
 		c.IdleTimeoutSec = d.IdleTimeoutSec
+	}
+	if c.HeadTimeoutSec < 0 {
+		c.HeadTimeoutSec = 0
+	}
+	if c.HeadTimeoutSec == 0 {
+		c.HeadTimeoutSec = d.HeadTimeoutSec
 	}
 	if c.ProbeTimeoutSec <= 0 {
 		c.ProbeTimeoutSec = d.ProbeTimeoutSec

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -25,6 +26,8 @@ type Client struct {
 	idle time.Duration
 	// probe は生きているかを尋ねる要求の待ち時間。生成とは別に持つ。
 	probe time.Duration
+	// head は、使い回した接続で応答の頭を待つ上限。
+	head time.Duration
 }
 
 // New は指定した接続先の Client を返す。
@@ -48,6 +51,24 @@ const DefaultIdle = 5 * time.Minute
 // いると判じてしまう。3 秒では足りなかった。
 const DefaultProbe = 10 * time.Second
 
+// DefaultHead は、使い回した接続で応答の頭を待つ上限。
+//
+// 使い回している接続は、黙って死んでいることがある。VPN の経路が張り直されると
+// 開いたままの接続はどちらにも通じなくなり、落ちたことはどちらの側にも
+// 伝わらない。送っても応答の頭すら返らず、TCP が諦めるまでは分単位かかる。
+//
+// 死んだ接続と、考え込んでいる相手は、こちらからは区別できない。区別できない
+// のだから、疑わしければ張り直す — 張り直しは接続 1 本ぶんの費用しかかからず、
+// 死んだ接続を待ち続けるのは無応答の上限 (既定 5 分) を丸ごと捨てる。
+//
+// 新しい接続には掛けない。そちらは繋がったばかりで、頭が遅いのはモデルの
+// 読み込みが長いときだからである。
+//
+// 90 秒にしてあるのは、読み込み済みのモデルでも、長い入力の読み取りにそこまで
+// 伸びうるためである。チームの手番は 1 手ごとに入力が総取り替えになるので、
+// 直列の会話より読み取りが長い (#640275)。
+const DefaultHead = 90 * time.Second
+
 func New(baseURL string) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
@@ -55,6 +76,7 @@ func New(baseURL string) *Client {
 		http:  &http.Client{Transport: transport()},
 		idle:  DefaultIdle,
 		probe: DefaultProbe,
+		head:  DefaultHead,
 	}
 }
 
@@ -87,6 +109,9 @@ func (c *Client) SetProbe(d time.Duration) {
 
 // SetIdle は何も届かないまま待つ上限を変える。0 以下なら見張らない。
 func (c *Client) SetIdle(d time.Duration) { c.idle = d }
+
+// SetHead は、使い回した接続で応答の頭を待つ上限を変える。0 以下なら待ち続ける。
+func (c *Client) SetHead(d time.Duration) { c.head = d }
 
 // Name は表示用の名前。
 func (c *Client) Name() string { return "ollama" }
@@ -214,33 +239,24 @@ func (c *Client) silent() error {
 
 // post は 1 回の生成要求を送り、応答の本体を返す。送り直すことがあるので
 // 切り出してある。返した応答の本体を閉じるのは呼び出し側。
+//
+// 失敗したら 1 度だけ張り直して送り直す。ここでの失敗は必ず「応答の頭が
+// 返る前」である — 頭が返っていれば要求そのものは成功として返り、その後の
+// 失敗は本体を読む側に出る。頭が返っていないなら相手はまだ何も返しておらず、
+// 送り直しても同じ生成が 2 度走ることにはならない。
 func (c *Client) post(ctx context.Context, body chatRequest) (*http.Response, error) {
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/chat", bytes.NewReader(buf))
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.http.Do(httpReq)
+	resp, err := c.send(ctx, buf, c.head)
 	if err != nil && ctx.Err() == nil {
-		// 使い回している接続が VPN の切断で死んでいることがある。死んだことは
-		// こちらに伝わらないので、掴んでから分かる。要求は本文を読み直せる
-		// (GetBody を持つ) ので、1 度だけ繋ぎ直して送り直す。
-		//
-		// やり直すのは繋ぐ段階の失敗だけである。相手が受け取ったあとの失敗を
-		// やり直すと、同じ生成が 2 度走る。
-		httpReq, err = http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/chat",
-			bytes.NewReader(buf))
-		if err != nil {
-			return nil, err
-		}
-		httpReq.Header.Set("Content-Type", "application/json")
+		// 掴んだ接続が死んでいた。抱えている使い回しの分をまとめて捨て、
+		// 張り直して送り直す。今度は頭を待つ上限を掛けない — 繋ぎ直した
+		// 接続で頭が遅いのは、モデルの読み込みが長いだけのことがある。
 		c.http.CloseIdleConnections()
-		resp, err = c.http.Do(httpReq)
+		resp, err = c.send(ctx, buf, 0)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("%w (%s): %v", provider.ErrUnavailable, c.baseURL, err)
@@ -250,6 +266,65 @@ func (c *Client) post(ctx context.Context, body chatRequest) (*http.Response, er
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
 		return nil, classify(body.Model, resp.StatusCode, raw)
 	}
+	return resp, nil
+}
+
+// send は要求を 1 度送る。
+//
+// head が正なら、使い回した接続に限って応答の頭までの上限を掛ける。掛けるか
+// どうかを送ってから決めるのは、接続を掴むまで使い回しかどうかが分からない
+// ためである。httptrace の GotConn がそれを教える。
+func (c *Client) send(ctx context.Context, buf []byte, head time.Duration) (*http.Response, error) {
+	reqCtx, cancel := context.WithCancel(ctx)
+
+	var reused atomic.Bool
+	// cut は頭を待つ上限で打ち切ったこと。呼び出し元の ctx は生きたままなので、
+	// これが無いと繋ぐ段階の失敗と見分けが付かない。
+	var cut atomic.Bool
+	settled := make(chan struct{})
+
+	trace := &httptrace.ClientTrace{
+		GotConn: func(i httptrace.GotConnInfo) { reused.Store(i.Reused) },
+	}
+	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(reqCtx, trace),
+		http.MethodPost, c.baseURL+"/api/chat", bytes.NewReader(buf))
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	if head > 0 {
+		go func() {
+			select {
+			case <-time.After(head):
+				// 繋ぎ直したばかりの接続は待ち続ける。頭が遅いのは、
+				// モデルの読み込みが長いだけのことがある。
+				if reused.Load() {
+					cut.Store(true)
+					cancel()
+				}
+			case <-settled:
+			}
+		}()
+	}
+
+	resp, err := c.http.Do(req)
+	close(settled)
+	if err != nil {
+		cancel()
+		if cut.Load() {
+			// 取り消しの失敗としてではなく、待った事実として返す。呼び出し元は
+			// 呼び出し元の ctx が生きているかを見て送り直すので、そこで
+			// 「中断された」と読めてしまうと張り直しが止まる。
+			return nil, fmt.Errorf(
+				"使い回していた接続から %s のあいだ応答の頭が返りませんでした", head)
+		}
+		return nil, err
+	}
+	// 頭が返った。ここで取り消すと、まだ読んでいない本体ごと閉じてしまう。
+	// 親が終わるときに一緒に片付ける — 親は流し終えたところで取り消される。
+	context.AfterFunc(ctx, cancel)
 	return resp, nil
 }
 
