@@ -142,6 +142,12 @@ func (e *Engine) runOneTool(ctx context.Context, rc *runCtx, callID string, call
 		Notice: func(text string) {
 			rc.emit(Event{Type: EvtNotice, AgentID: rc.agent.ID, Text: text})
 		},
+		// 実行中の出力を、推論と同じように流す。終わるまで何も見えないと、
+		// 長く走るものは止まっているのと区別が付かない (#470913)。
+		Output: func(chunk string) {
+			rc.emit(Event{Type: EvtToolOutput, Depth: rc.depth, AgentID: rc.agent.ID,
+				Tool: call.Name, ToolCallID: callID, Text: chunk})
+		},
 	}
 	return tool.Execute(ctx, ec, call.Arguments)
 }

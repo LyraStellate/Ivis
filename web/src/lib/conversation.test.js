@@ -352,3 +352,63 @@ describe('圧縮の知らせ', () => {
     expect(items[0].text).toBe('古い依頼')
   })
 })
+
+describe('実行中の出力', () => {
+  const call = (t) =>
+    t.apply({ type: 'tool_call', tool_call_id: 'x.0', tool: 'run_command', args: {}, depth: 0 })
+
+  it('届いたそばから積まれ、結果とは別に持つ', () => {
+    const t = new Transcript([])
+    call(t)
+    t.apply({ type: 'tool_output', tool_call_id: 'x.0', text: '1 行目\n' })
+    t.apply({ type: 'tool_output', tool_call_id: 'x.0', text: '2 行目\n' })
+
+    expect(t.items[0].live).toBe('1 行目\n2 行目\n')
+    // 結果へ混ぜない。混ぜると、途中の文字で成否が早とちりする。
+    expect(t.items[0].result).toBe('')
+    expect(t.items[0].status).toBe('running')
+  })
+
+  it('結果が来たら流していた分を捨てる', () => {
+    const t = new Transcript([])
+    call(t)
+    t.apply({ type: 'tool_output', tool_call_id: 'x.0', text: '途中\n' })
+    t.apply({ type: 'tool_result', tool_call_id: 'x.0', result: '途中\n終わり' })
+
+    // 両方を残すと同じものが 2 度並ぶ。全部を持つのは結果のほうである。
+    expect(t.items[0].live).toBe('')
+    expect(t.items[0].result).toBe('途中\n終わり')
+    expect(t.items[0].status).toBe('done')
+  })
+
+  it('末尾だけを残す', () => {
+    const t = new Transcript([])
+    call(t)
+    for (let i = 0; i < 400; i++) {
+      t.apply({ type: 'tool_output', tool_call_id: 'x.0', text: `行 ${i}\n` })
+    }
+    const lines = t.items[0].live.split('\n').filter((l) => l !== '')
+    expect(lines.length).toBe(300)
+    // 捨てるのは古い側。読まれるのはほぼ常に直近である。
+    expect(lines[lines.length - 1]).toBe('行 399')
+    expect(lines[0]).toBe('行 100')
+  })
+
+  it('繋ぎ直しで二重にならない', () => {
+    const t = new Transcript([])
+    call(t)
+    t.apply({ type: 'tool_output', tool_call_id: 'x.0', text: 'あ\n' })
+    // 繋ぎ直すと控えが頭から流し直される。
+    call(t)
+    t.apply({ type: 'tool_output', tool_call_id: 'x.0', text: 'あ\n' })
+
+    expect(t.items.length).toBe(1)
+    expect(t.items[0].live).toBe('あ\n')
+  })
+
+  it('知らない呼び出しの出力は捨てる', () => {
+    const t = new Transcript([])
+    t.apply({ type: 'tool_output', tool_call_id: 'none', text: 'x' })
+    expect(t.items.length).toBe(0)
+  })
+})

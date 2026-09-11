@@ -32,7 +32,11 @@
   const name = $derived(item.kind === 'user' ? USER_NAME : (item.agentId ?? ''))
   const nameColor = $derived(item.kind === 'user' ? USER_COLOR : whoColor(item.agentId, colorOf))
 
-  const open = $derived(item.status === 'error' || item.status === 'awaiting')
+  // 走っている間も開いておく。実行中の出力は、見えていなければ流す意味がない
+  // (#470913)。
+  const open = $derived(
+    item.status === 'error' || item.status === 'awaiting' || !!item.live,
+  )
 
   // チームのメッセージ。宛先の色も引く。誰から誰へ流れたのかは、名前の色が
   // 2 つ並んではじめて一目で分かる (#640275)。
@@ -71,6 +75,14 @@
   $effect(() => {
     item.thinking
     if (thinkLive && thinkBox) thinkBox.scrollTop = thinkBox.scrollHeight
+  })
+
+  // 流れている出力も末尾を見せ続ける。上端で止まっていると、伸びているのに
+  // 何も動いていないように見える。
+  let liveBox = $state(null)
+  $effect(() => {
+    item.live
+    if (liveBox) liveBox.scrollTop = liveBox.scrollHeight
   })
 
   // 走っている道具の経過時間。終わってから所要時間を出すだけだと、その間は
@@ -227,7 +239,13 @@
         </summary>
         <div class="detail">
           {#if item.args}<pre class="mono">{JSON.stringify(item.args, null, 2)}</pre>{/if}
-          {#if item.result}<pre class="mono result">{item.result}</pre>{/if}
+          <!-- 実行中の出力。終わると結果に置き換わる。両方を残すと同じものが
+               2 度並ぶ。 -->
+          {#if item.live}
+            <pre class="mono result live" bind:this={liveBox}>{item.live}</pre>
+          {:else if item.result}
+            <pre class="mono result">{item.result}</pre>
+          {/if}
         </div>
       </details>
 
@@ -562,6 +580,11 @@
   .waiting { flex: none; color: var(--accent-line); font-size: 11px; }
 
   .detail { padding: 4px 0 6px 14px; display: grid; gap: 6px; }
+  /* 流れている間は、終わったものと見分けが付くようにしておく。 */
+  .detail pre.live {
+    border-left: 2px solid var(--accent-line);
+    padding-left: 6px;
+  }
   .detail pre {
     margin: 0;
     background: var(--sunken);

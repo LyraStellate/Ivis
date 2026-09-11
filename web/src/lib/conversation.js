@@ -7,6 +7,23 @@
 //   kind   'user' | 'agent' | 'tool' | 'delegate' | 'summary' | 'notice' | 'team'
 //   status 'streaming' | 'running' | 'awaiting' | 'done' | 'error' | 'denied' | 'stopped'
 
+/**
+ * 画面に残す実行中の出力の行数。
+ *
+ * ビルドは数万行を吐く。全部を持つとブラウザが重くなるだけで、読まれるのは
+ * ほぼ常に直近である。全文は終わったときの結果のほうが持つ。
+ */
+const LIVE_LINES = 300
+
+/** 末尾の n 行だけを残す。 */
+function tailLines(text, n) {
+  const lines = text.split('\n')
+  // 末尾が改行なら split の最後は空になる。これは行ではないので数えない。
+  const tail = lines[lines.length - 1] === '' ? 1 : 0
+  if (lines.length - tail <= n) return text
+  return lines.slice(lines.length - tail - n).join('\n')
+}
+
 /** ツールの結果から成否を読み取る。 */
 function statusOf(text) {
   if (!text) return 'done'
@@ -315,6 +332,7 @@ export class Transcript {
         if (seen) {
           seen.status = 'running'
           seen.result = ''
+          seen.live = ''
           break
         }
         box.push({
@@ -324,8 +342,18 @@ export class Transcript {
           tool: ev.tool,
           args: ev.args ?? null,
           result: '',
+          // live は実行中に流れてくる出力。結果とは別に持つ。混ぜると、
+          // 途中の文字で状態が早とちりする (statusOf は頭を見る)。
+          live: '',
           startedAt: Date.now(),
         })
+        break
+      }
+
+      // 実行中の出力。推論の delta と同じで、届いたそばから足していく。
+      case 'tool_output': {
+        const it = findById(box, ev.tool_call_id)
+        if (it) it.live = tailLines(it.live + (ev.text ?? ''), LIVE_LINES)
         break
       }
 
@@ -370,6 +398,9 @@ export class Transcript {
           break
         }
         it.result = ev.result ?? ''
+        // 流していた分は捨てる。結果のほうが全部を持っており、両方を残すと
+        // 同じものが 2 度並ぶ。
+        it.live = ''
         it.status = statusOf(it.result)
         break
       }

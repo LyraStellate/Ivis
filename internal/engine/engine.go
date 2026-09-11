@@ -69,12 +69,18 @@ type Asker interface {
 
 // イベント種別。UI はこれを見て表示を組み立てる。
 const (
-	EvtUserSaved     = "user_saved"
-	EvtMessageStart  = "message_start"
-	EvtDelta         = "delta"
-	EvtThinking      = "thinking"
-	EvtMessageEnd    = "message_end"
-	EvtToolCall      = "tool_call"
+	EvtUserSaved    = "user_saved"
+	EvtMessageStart = "message_start"
+	EvtDelta        = "delta"
+	EvtThinking     = "thinking"
+	EvtMessageEnd   = "message_end"
+	EvtToolCall     = "tool_call"
+	// EvtToolOutput は実行中の道具が吐いた出力の断片。
+	//
+	// 推論の delta と同じ扱いで、会話には残らない — 残るのは EvtToolResult が
+	// 運ぶ最終的な結果のほうである。控えが溢れたときは delta と一緒に
+	// 真っ先に捨てられる (#470913)。
+	EvtToolOutput    = "tool_output"
 	EvtToolResult    = "tool_result"
 	EvtApproval      = "approval_request"
 	EvtQuestion      = "question"

@@ -72,7 +72,10 @@ func (l *live) emit(ev engine.Event) {
 func (l *live) trim() {
 	kept := l.buf[:0]
 	for _, ev := range l.buf {
-		if ev.Type == engine.EvtDelta || ev.Type == engine.EvtThinking {
+		// 道具の出力も字と同じ扱いで真っ先に捨てる。ビルドのログは 1 回で
+		// 数万件になり、残すと道具の呼び出しや承認の求めを押し出す。
+		if ev.Type == engine.EvtDelta || ev.Type == engine.EvtThinking ||
+			ev.Type == engine.EvtToolOutput {
 			continue
 		}
 		kept = append(kept, ev)
