@@ -101,8 +101,7 @@ func (e *Engine) Run(ctx context.Context, sessionID, userText string, emit Emit)
 
 // loop はツール呼び出しが無くなるまで生成を繰り返す。最後の本文を返す。
 func (e *Engine) loop(ctx context.Context, rc *runCtx) (string, error) {
-	sys := systemPrompt(rc.agent, e.Skills.Filter(rc.agent.Skills), e.delegateAgents(rc),
-		e.Cfg.SessionWorkspace(rc.kind, rc.sessionID), time.Now(), e.teamNote(ctx, rc))
+	sys := e.systemFor(ctx, rc)
 	defs := e.Tools.Defs(e.allows(rc), rc.team())
 	opts := e.options(ctx, rc.agent)
 
@@ -111,8 +110,18 @@ func (e *Engine) loop(ctx context.Context, rc *runCtx) (string, error) {
 	// 見分けるために持つ。
 	var lastCall string
 	repeats := 1
+	// retried は打ち切りからのやり直しを既に使ったこと。1 つのループで
+	// 1 度だけ許す。まとめても入らない大きさなら、繰り返しても同じである。
+	retried := false
 
 	for iter := 0; iter < e.Cfg.MaxIterations; iter++ {
+		// 反復の先頭で見る。ここは直前のツール呼び出しと、それに対応する
+		// 全ての結果が揃っている唯一の境界である。生成の途中で入力を
+		// 組み替えると、その対応関係が壊れる (#486237)。
+		if iter > 0 && e.compactMidLoop(ctx, rc) {
+			sys = e.systemFor(ctx, rc)
+		}
+
 		req := provider.Request{
 			Model:    rc.agent.Model,
 			Messages: append([]provider.Message{{Role: provider.RoleSystem, Content: sys}}, rc.msgs...),
@@ -121,13 +130,33 @@ func (e *Engine) loop(ctx context.Context, rc *runCtx) (string, error) {
 			Think:    rc.agent.Thinking,
 		}
 
-		msgID, text, calls, err := e.generate(ctx, rc, req)
+		res, err := e.generate(ctx, rc, req)
 		if err != nil {
 			return last, err
 		}
-		last = text
+		last = res.text
+
+		// 溢れて切られた。まとめ直せば続きが入るので、1 度だけやり直す。
+		//
+		// やり直さずに次の反復へ入っても、入力の大きさは変わらないので
+		// 同じ場所で溢れ直すだけである。
+		if res.cut {
+			if !retried && e.compactAfterCut(ctx, rc) {
+				retried = true
+				sys = e.systemFor(ctx, rc)
+				continue
+			}
+			note := fmt.Sprintf("コンテキストの上限 (%d) に達したため、ここで打ち切られました。"+
+				"続きが要るなら、設定のコンテキスト長を増やすか、会話を分けてください。",
+				e.contextLimit(ctx, rc.agent))
+			rc.emit(Event{Type: EvtError, MessageID: res.msgID, Depth: rc.depth,
+				AgentID: rc.agent.ID, Error: note})
+			return last, nil
+		}
+
+		msgID, calls := res.msgID, res.calls
 		rc.msgs = append(rc.msgs, provider.Message{
-			Role: provider.RoleAssistant, Content: text, ToolCalls: calls,
+			Role: provider.RoleAssistant, Content: res.text, ToolCalls: calls,
 		})
 		if len(calls) == 0 {
 			return last, nil
@@ -211,14 +240,26 @@ func (e *Engine) options(ctx context.Context, a *agent.Agent) map[string]any {
 	return opts
 }
 
+// genResult は 1 回の生成の結果。
+//
+// 打ち切られたかどうかを呼び出し元へ渡すために、まとめた形で返す。rc に
+// 印を置く形は採らない — 反復をまたいで生き残り、消し忘れが次の反復に効く。
+type genResult struct {
+	// msgID は保存した発言の識別子。ツール呼び出しに一意な名前を与える。
+	msgID string
+	text  string
+	calls []provider.ToolCall
+	// cut はコンテキストが尽きて生成が打ち切られたこと。
+	cut bool
+}
+
 // generate は 1 回の生成を行い、保存した発言の識別子・本文・ツール呼び出しを返す。
-// 識別子はツール呼び出しに一意な名前を与えるために使う。
-func (e *Engine) generate(ctx context.Context, rc *runCtx, req provider.Request) (string, string, []provider.ToolCall, error) {
+func (e *Engine) generate(ctx context.Context, rc *runCtx, req provider.Request) (genResult, error) {
 	stream, err := e.Provider.Chat(ctx, req)
 	if err != nil {
 		rc.emit(Event{Type: EvtError, Depth: rc.depth, AgentID: rc.agent.ID,
 			Error: err.Error(), Kind: KindOf(err)})
-		return "", "", nil, reported(err)
+		return genResult{}, reported(err)
 	}
 
 	msg := &store.Message{
@@ -229,7 +270,7 @@ func (e *Engine) generate(ctx context.Context, rc *runCtx, req provider.Request)
 		Model:     rc.agent.Model,
 	}
 	if err := e.Store.AppendMessage(ctx, msg); err != nil {
-		return "", "", nil, fmt.Errorf("応答を保存できませんでした: %w", err)
+		return genResult{}, fmt.Errorf("応答を保存できませんでした: %w", err)
 	}
 	rc.emit(Event{Type: EvtMessageStart, MessageID: msg.ID, AgentID: rc.agent.ID,
 		ParentID: rc.parentID, Depth: rc.depth})
@@ -294,22 +335,28 @@ loop:
 		persist(genErr.Error())
 		rc.emit(Event{Type: EvtError, MessageID: msg.ID, Depth: rc.depth,
 			AgentID: rc.agent.ID, Error: genErr.Error(), Kind: KindOf(genErr)})
-		return msg.ID, sb.String(), nil, reported(genErr)
+		return genResult{msgID: msg.ID, text: sb.String()}, reported(genErr)
 	}
 	if cut {
-		// 失敗ではないが、続きがある。何が起きたかと、次に何をすれば
-		// よいかを添える。
-		note := fmt.Sprintf("コンテキストの上限 (%d) に達したため、ここで打ち切られました。"+
-			"続きが要るなら、設定のコンテキスト長を増やすか、会話を分けてください。",
-			e.contextLimit(ctx, rc.agent))
-		persist(note)
-		rc.emit(Event{Type: EvtError, MessageID: msg.ID, Depth: rc.depth,
-			AgentID: rc.agent.ID, Error: note})
-		return msg.ID, sb.String(), calls, nil
+		// 失敗ではないが、続きがある。何が起きたのかは履歴に残す。
+		//
+		// 外へ知らせるのは loop である。まとめてやり直す気があるのに
+		// 「会話を分けてください」と出すのは、誤った案内になる (#486237)。
+		persist(fmt.Sprintf(
+			"コンテキストの上限 (%d) に達したため、ここで打ち切られました。",
+			e.contextLimit(ctx, rc.agent)))
+		return genResult{msgID: msg.ID, text: sb.String(), calls: calls, cut: true}, nil
 	}
 	persist("")
 	rc.emit(Event{Type: EvtMessageEnd, MessageID: msg.ID, Depth: rc.depth})
-	return msg.ID, sb.String(), calls, nil
+	return genResult{msgID: msg.ID, text: sb.String(), calls: calls}, nil
+}
+
+// systemFor はこの実行の指示文を組み立てる。まとめたあとは担当チケットも
+// 変わっているので、その都度作り直す。
+func (e *Engine) systemFor(ctx context.Context, rc *runCtx) string {
+	return systemPrompt(rc.agent, e.Skills.Filter(rc.agent.Skills), e.delegateAgents(rc),
+		e.Cfg.SessionWorkspace(rc.kind, rc.sessionID), time.Now(), e.teamNote(ctx, rc))
 }
 
 func (e *Engine) maybeSetTitle(ctx context.Context, sess *store.Session, userText string) {

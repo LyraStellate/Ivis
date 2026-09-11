@@ -44,8 +44,99 @@ DROP:
 - もう関係ない長いログ
 - すでに捨てたアイデア`
 
-// autoCompactAt は自動で圧縮を始める割合。
+// autoCompactAt は自動で圧縮を始める割合。ターンの終わりに見る。
 const autoCompactAt = 0.9
+
+// loopCompactAt はツールの往復の途中で圧縮を始める割合。
+//
+// ターンの終わりより早く見るのは、反復の中で読める使用量が 1 往復ぶん古い
+// ためである。いま積んだツールの結果はまだ入っていないので、同じ 0.9 で
+// 見ると、次の 1 回でそのまま溢れる (#486237)。
+const loopCompactAt = 0.8
+
+// resumeNote はまとめた直後に足す 1 通。
+//
+// 引き直した並びは要約 1 件だけになり、それは system 役へ写る。モデルに
+// 「いま何をしているか」を促すものが 1 つも無くなるので、続きを促す。
+// engine が繕う 1 通なので、会話には保存しない。
+const resumeNote = "ここまでのやり取りをまとめました。上の要約を前提に、途中だった作業の続きから進めてください。" +
+	"直前に呼んだ道具を同じ引数で呼び直す必要はありません。"
+
+// compactMidLoop は上限に近づいていれば、ツールの往復の途中でまとめる。
+// まとめて入力を引き直したなら真を返す。
+//
+// 委譲した子ではやらない。使用量を書いているのは親のターンなので読む値は
+// 親のものだし、子の中でまとめると親の rc.msgs が古くなる。そのとき親は
+// ツールの往復の最中で、入力を組み替えてよい境界に居ない (#486237)。
+func (e *Engine) compactMidLoop(ctx context.Context, rc *runCtx) bool {
+	if rc.depth != 0 {
+		return false
+	}
+	sess, err := e.Store.GetSession(ctx, rc.sessionID)
+	if err != nil || sess.ContextLimit <= 0 {
+		return false
+	}
+	if float64(sess.ContextTokens) < loopCompactAt*float64(sess.ContextLimit) {
+		return false
+	}
+	rc.emit(Event{Type: EvtNotice, Text: fmt.Sprintf(
+		"コンテキストが上限の %d%% に達したため、作業の途中でこれまでをまとめています。",
+		int(loopCompactAt*100))})
+	return e.compactAndReload(ctx, rc)
+}
+
+// compactAfterCut は打ち切られたあと、やり直すためにまとめる。
+func (e *Engine) compactAfterCut(ctx context.Context, rc *runCtx) bool {
+	if rc.depth != 0 {
+		return false
+	}
+	rc.emit(Event{Type: EvtNotice,
+		Text: "コンテキストの上限に達したため、これまでをまとめて続きから進めます。"})
+	return e.compactAndReload(ctx, rc)
+}
+
+// compactAndReload はまとめ直し、この実行の入力を引き直す。
+func (e *Engine) compactAndReload(ctx context.Context, rc *runCtx) bool {
+	rc.emit(Event{Type: EvtStage, Stage: StageCompacting})
+	defer rc.emit(Event{Type: EvtStage})
+
+	if _, err := e.Compact(ctx, rc.sessionID, "", func(chars int) {
+		rc.emit(Event{Type: EvtStage, Stage: StageCompacting, Done: chars})
+	}); err != nil {
+		// まとめる分が無いなら、ここで騒いでも利用者に打てる手が無い。
+		if !errors.Is(err, ErrNothingToCompact) {
+			rc.emit(Event{Type: EvtNotice, Text: "まとめられませんでした: " + err.Error()})
+		}
+		return false
+	}
+	if err := e.reloadMessages(ctx, rc); err != nil {
+		rc.emit(Event{Type: EvtNotice, Text: "まとめたあとの読み直しに失敗しました: " + err.Error()})
+		return false
+	}
+	return true
+}
+
+// reloadMessages はまとめたあとの入力を組み立て直す。
+//
+// 直列でもチームでも、履歴を引く関数は「最後の要約以降」だけを返す。この
+// ターンの往復も既に保存済みなので、素直に引き直せば要約へ畳み込まれる。
+func (e *Engine) reloadMessages(ctx context.Context, rc *runCtx) error {
+	if rc.team() {
+		history, err := e.Store.TeamMessages(ctx, rc.sessionID, rc.agent.ID)
+		if err != nil {
+			return err
+		}
+		rc.msgs = toTeamMessages(history, rc.roster, rc.agent.ID)
+	} else {
+		history, err := e.Store.ConversationMessages(ctx, rc.sessionID)
+		if err != nil {
+			return err
+		}
+		rc.msgs = toProviderMessages(history)
+	}
+	rc.msgs = append(rc.msgs, provider.Message{Role: provider.RoleUser, Content: resumeNote})
+	return nil
+}
 
 // StageCompacting は圧縮の最中であることを表す印。画面はこれを見て、待って
 // いる時間に何をしているかを出す。
