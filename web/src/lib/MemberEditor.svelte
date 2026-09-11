@@ -1,5 +1,5 @@
 <script>
-  // セッション固有のエージェントを 1 体だけ編集する。
+  // チームエージェントを 1 体だけ編集する。
   //
   // 設定画面のエージェント編集 (AgentSettings) を使い回さないのは、あちらが
   // 一覧と編集を並べた画面全体の作りだからである。ここで要るのは 1 体分の
@@ -50,7 +50,7 @@
   }
 
   async function save() {
-    const bad = check(draft, isNew ? takenIds : [], { local: true })
+    const bad = check(draft, isNew ? takenIds : [], { team: true })
     if (bad) {
       error = bad.reason
       badField = bad.field
@@ -61,10 +61,14 @@
     badField = ''
     try {
       const body = payload(draft)
-      const roster = isNew
-        ? await api.createSessionAgent(sessionId, body)
-        : await api.updateSessionAgent(sessionId, agent.id, body)
-      onDone(roster)
+      // 作るのは会話の下 (作成と有効化が 1 度で済む)、直すのは共有物への
+      // 操作なので会話の外。
+      if (isNew) {
+        onDone(await api.createTeamAgent(sessionId, body))
+      } else {
+        await api.updateTeamAgent(agent.id, body)
+        onDone(null)
+      }
     } catch (e) {
       error = e.message
       badField = e.field ?? ''
@@ -88,9 +92,14 @@
     aria-label={isNew ? 'このチームのエージェントを作る' : draft.id + ' を編集'}
     use:trapFocus
   >
-    <h2>{isNew ? 'このチームのエージェント' : draft.id}</h2>
+    <h2>{isNew ? '新しいチームエージェント' : draft.id}</h2>
     <p class="lede">
-      この会話の中だけに居ます。共通の一覧には出ず、会話を消せば一緒に消えます。
+      チームエージェントは<strong>すべてのチーム会話で共有されます</strong>。
+      {#if isNew}
+        作るとこの会話で有効になり、ほかの会話からも選べるようになります。
+      {:else}
+        直すと、有効にしている<strong>すべての会話に効きます</strong>。
+      {/if}
     </p>
 
     <div class="grid">

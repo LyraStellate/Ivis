@@ -49,16 +49,20 @@ export const cancelRun = (id) => fetch(`/api/sessions/${id}/cancel`, json('POST'
 // チームの名簿 (#731906)。参加中のメンバーと、参加していない共通エージェントを
 // 1 度で返す。2 回に分けると、片方だけ古い一覧を描く瞬間が生まれる。
 export const getRoster = (id) => fetch(`/api/sessions/${id}/agents`).then(unwrap)
-export const joinMember = (id, agent_id, join) =>
+export const enableMember = (id, agent_id, join) =>
   fetch(`/api/sessions/${id}/members`, json('POST', { agent_id, join })).then(unwrap)
-export const createSessionAgent = (id, a) =>
+// 作成とコピーは会話の下にある。定義を作るのと、この会話で有効にするのを
+// 1 度に行う操作だからである。
+export const createTeamAgent = (id, a) =>
   fetch(`/api/sessions/${id}/agents`, json('POST', a)).then(unwrap)
-export const updateSessionAgent = (id, aid, a) =>
-  fetch(`/api/sessions/${id}/agents/${aid}`, json('PUT', a)).then(unwrap)
-export const deleteSessionAgent = (id, aid) =>
-  fetch(`/api/sessions/${id}/agents/${aid}`, { method: 'DELETE' }).then(unwrap)
 export const copyAgent = (id, agent_id, newId) =>
   fetch(`/api/sessions/${id}/agents/copy`, json('POST', { agent_id, id: newId })).then(unwrap)
+// 編集と削除は共有物への操作なので、会話の下に置かない。直せば、有効に
+// している全ての会話に効く。
+export const updateTeamAgent = (aid, a) =>
+  fetch(`/api/team-agents/${aid}`, json('PUT', a)).then(unwrap)
+export const deleteTeamAgent = (aid) =>
+  fetch(`/api/team-agents/${aid}`, { method: 'DELETE' }).then(unwrap)
 
 // チケット (#189542)。チームの唯一の共有状態なので、画面からも直せる。
 export const listTickets = (id, q = {}) => {

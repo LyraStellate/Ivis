@@ -243,18 +243,8 @@
     if (!updated) return
     session = updated
     sessions = sessions.map((s) => (s.id === updated.id ? updated : s))
-    // チームでは、これは窓口を移す操作である。名簿の側の印も付け替わる。
-    if (updated.kind === 'team') roster = await guard(() => api.getRoster(updated.id))
   }
 
-  // 右のパネルから窓口を移す。断られた理由はパネルが出すので、ここでは
-  // 包まずに投げ返す。
-  async function setLead(agentId) {
-    const updated = await api.patchSession(currentId, { agent_id: agentId })
-    session = updated
-    sessions = sessions.map((s) => (s.id === updated.id ? updated : s))
-    return await api.getRoster(currentId)
-  }
 
   async function send(text) {
     if (!currentId || runningId != null) return
@@ -445,7 +435,7 @@
         {stage}
         {commands}
         {members}
-        leadId={roster?.lead_id ?? ''}
+        {roster}
         isTeam={isTeam}
         panelHidden={isTeam ? panelHidden : null}
         onTogglePanel={() => (panelHidden = !panelHidden)}
@@ -498,7 +488,6 @@
       {colorOf}
       onRoster={(r) => (roster = r)}
       onTickets={refreshTickets}
-      onLead={setLead}
       width={panelWidth}
       bounds={PANEL}
       onResize={resizePanel}

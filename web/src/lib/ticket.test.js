@@ -36,16 +36,17 @@ vi.mock('./api.js', () => ({
   addTicketNote: vi.fn(async () => full),
   listTools: vi.fn(async () => []),
   listSkills: vi.fn(async () => []),
-  joinMember: vi.fn(async () => null),
+  enableMember: vi.fn(async () => null),
   copyAgent: vi.fn(async () => null),
-  deleteSessionAgent: vi.fn(async () => null),
-  createSessionAgent: vi.fn(async () => null),
-  updateSessionAgent: vi.fn(async () => null),
+  getRoster: vi.fn(async () => null),
+  deleteTeamAgent: vi.fn(async () => null),
+  createTeamAgent: vi.fn(async () => null),
+  updateTeamAgent: vi.fn(async () => null),
 }))
 
 const { default: TeamPanel } = await import('./TeamPanel.svelte')
 
-const roster = { members: [], available: [], lead_id: '', errors: [] }
+const roster = { members: [], available: [], errors: [] }
 
 function render() {
   const target = document.createElement('div')
@@ -60,7 +61,6 @@ function render() {
       colorOf: () => '',
       onRoster: () => {},
       onTickets: async () => {},
-      onLead: async () => roster,
       width: 264,
       bounds: { min: 200, max: 620, base: 264 },
       onResize: () => {},

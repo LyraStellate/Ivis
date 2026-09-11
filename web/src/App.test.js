@@ -83,10 +83,9 @@ vi.mock('./lib/api.js', () => ({
   }),
   listTickets: vi.fn(async () => []),
   getRoster: vi.fn(async () => ({
-    // 色を選んである固有のメンバー。共通の一覧には居ない。
-    members: [{ id: 'painter', name: 'Painter', tier: 1, local: true, color: 'rose' }],
+    // 色を選んであるチームのメンバー。共通の一覧には居ない。
+    members: [{ id: 'painter', name: 'Painter', tier: 1, scope: 'team', color: 'rose' }],
     available: [],
-    lead_id: 'painter',
     errors: [],
   })),
 }))

@@ -8,7 +8,7 @@
 
   let {
     session, agents: allAgents, items, busy, moved = 0, stage = null, commands = [],
-    members = [], leadId = '', isTeam = false,
+    members = [], isTeam = false, roster = null,
     // panelHidden は null なら右のパネルそのものが無い会話 (直列)。
     panelHidden = null, onTogglePanel = null,
     notice, status, railHidden, onToggleRail,
@@ -19,16 +19,19 @@
   let scroller = $state(null)
   let pinned = $state(true)
 
-  // 入力欄で選べる相手。チームではこの会話の名簿から選ぶ — そこで選ぶのは
-  // 窓口であり、居ない相手は窓口にできない (#731906)。
-  const agents = $derived(isTeam ? members : allAgents)
+  const agents = $derived(allAgents)
 
-  const agent = $derived(agents.find((a) => a.id === session?.agent_id) ?? null)
-  // 名簿が届く前に「居ない」と言わない。開いた直後の一瞬だけ空になるので、
-  // そこで送信を止めると、開くたびに帯が明滅する。
-  const missingAgent = $derived(
-    session != null && agent == null && (!isTeam || members.length > 0),
-  )
+  // 続けられない理由。直列では答え手の定義が消えたとき、チームでは名簿が
+  // 空になったときである。
+  //
+  // チームで session.agent_id を見てはいけない。あれは会話を作ったときの
+  // 記録であって、実行では読まない値になった。見ると、いつでも「居ない」に
+  // なって送信が止まる (#640275)。
+  //
+  // 名簿が届く前に「居ない」と言わないよう、roster が来るまでは黙る。
+  const agent = $derived(allAgents.find((a) => a.id === session?.agent_id) ?? null)
+  const missingAgent = $derived(session != null && !isTeam && agent == null)
+  const emptyTeam = $derived(isTeam && roster != null && members.length === 0)
   const providerDown = $derived(status != null && !status.provider_ok)
 
   // Discord の会話は画面からは進まない。送れても、その内容はチャンネルに
@@ -125,7 +128,11 @@
   {/if}
 </header>
 
-{#if missingAgent}
+{#if emptyTeam}
+  <p class="banner">
+    この会話にはメンバーが 1 人も居ません。右のパネルから足してください。
+  </p>
+{:else if missingAgent}
   <p class="banner">
     このセッションのエージェント <span class="mono">{session.agent_id}</span> の定義が
     見つかりません。履歴は読めますが、続きは送れません。定義を戻すか、入力欄で
@@ -184,8 +191,8 @@
 <Composer
   {commands}
   {members}
-  {leadId}
-  disabled={missingAgent || fromDiscord}
+  showAgents={!isTeam}
+  disabled={missingAgent || emptyTeam || fromDiscord}
   reason={fromDiscord ? 'この会話は Discord から進みます。ここからは読むだけです' : ''}
   {busy}
   {agents}

@@ -6,7 +6,9 @@
     commands = [],
     // members はチームセッションの名簿。宛先の候補に使う。直列の会話では空。
     members = [],
-    leadId = '',
+    // showAgents が偽なら相手を選ぶ欄を出さない。チームでは宛先をメンションで
+    // 決めるので、選ばせる欄は意味を持たない。
+    showAgents = true,
     disabled = false,
     // reason は送れない理由。ただ押せなくすると、壊れているのか、そういう
     // ものなのかが分からない。
@@ -62,15 +64,20 @@
   const typingTo = $derived(members.length > 0 && /^@[^\s]*$/.test(draft))
   const mark = $derived(typingTo ? '@' : '/')
 
-  // 宛先の候補。"*" を先に置く。誰に頼めばよいか分からないときにこそ開く
-  // 一覧なので、判断を委ねる選択肢が上にある。
-  const addressees = $derived([
-    { name: '*', desc: leadId ? `宛先を ${leadId} が決めます` : '宛先を窓口が決めます' },
-    ...members.map((m) => ({
-      name: m.id,
-      desc: `${m.name}${m.lead ? ' (窓口)' : ''} \u00b7 Tier ${m.tier}`,
-    })),
-  ])
+  // 宛先の候補。判断を委ねる選択肢は無い — 誰に頼むかを決めるのは利用者で
+  // ある (#640275)。
+  const addressees = $derived(
+    members.map((m) => ({ name: m.id, desc: `${m.name} \u00b7 Tier ${m.tier}` })),
+  )
+
+  // 宛先を書かないと届かない。名簿が 1 人なら迷う余地が無いので、そのまま
+  // 送れる。
+  //
+  // ここで止めるのは、送ってからサーバーに断られると、画面が先に置いた
+  // 吹き出しだけが残って再読込で消えるからである。押させないのが一番安い。
+  const needsAddressee = $derived(
+    members.length > 1 && !draft.startsWith('@') && !draft.startsWith('/'),
+  )
 
   const matches = $derived.by(() => {
     const list = typingCmd ? commands : typingTo ? addressees : []
@@ -95,7 +102,7 @@
   function submit() {
     // 生成中は送れない。ただし書いておくことはできる。返ってくるのを待つ間に
     // 次の依頼をまとめられるようにするためで、書きかけは消さない。
-    if (disabled || busy) return
+    if (disabled || busy || needsAddressee) return
     const text = draft.trim()
     if (!text) return
     draft = ''
@@ -185,7 +192,7 @@
       aria-label="メッセージ"
     ></textarea>
     <div class="bar">
-      {#if agents.length > 0}
+      {#if showAgents && agents.length > 0}
         <label class="who">
           <span class="sr">エージェント</span>
           <select
@@ -211,9 +218,11 @@
             ? '生成中は送信できません。Esc で中断'
             : draft.startsWith('/')
               ? 'コマンドとして実行します。/help で一覧'
-              : members.length > 0 && !draft.startsWith('@')
-                ? `宛先を書かなければ ${leadId} へ届きます。@ で相手を選べます`
-                : 'Shift + Enter で改行')}
+              : needsAddressee
+                ? '@ で宛先を指定してください。宛先を書かない依頼は届きません'
+                : members.length === 1 && !draft.startsWith('@')
+                  ? `${members[0].id} へ届きます`
+                  : 'Shift + Enter で改行')}
       </span>
 
       <!-- 始める操作と止める操作を同じ場所に置く。走っているものを止める
@@ -223,7 +232,7 @@
         class:stop={busy}
         type="button"
         onclick={busy ? onCancel : submit}
-        disabled={!busy && (disabled || !draft.trim())}
+        disabled={!busy && (disabled || !draft.trim() || needsAddressee)}
         title={busy ? '生成を中断' : '送信'}
         aria-label={busy ? '生成を中断' : '送信'}
       >
