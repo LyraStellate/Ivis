@@ -1,9 +1,15 @@
 <script>
   // チームセッションの右パネル (#731906 / #189542)。
   //
-  // 上から 共通エージェント / 固有エージェント / チケット の 3 つを積む。
-  // それぞれ折りたためる。チケットは一覧だけを置き、1 件は会話の上に重ねて
-  // 開く — この幅では概要と注記が読めないためである。
+  // 上から この会話のメンバー / 共通エージェント / チームエージェント /
+  // チケット の 4 つを積む。それぞれ折りたためる。
+  //
+  // 有効にしたものを 1 つの欄にまとめるのは、「@ を打つと誰が出るのか」に
+  // 画面の 1 か所が答えられるようにするためである。由来で割ると 2 か所を見て
+  // 頭の中で合成することになり、並びもメンション補完と一致しない (#731906)。
+  //
+  // チケットは一覧だけを置き、1 件は会話の上に重ねて開く — この幅では概要と
+  // 注記が読めないためである。
   import * as api from './api.js'
   import Confirm from './Confirm.svelte'
   import MemberEditor from './MemberEditor.svelte'
@@ -18,7 +24,6 @@
     colorOf,
     onRoster,
     onTickets,
-    onLead,
     width = 264,
     bounds = { min: 200, max: 620, base: 264 },
     onResize,
@@ -69,13 +74,19 @@
 
   const members = $derived(roster?.members ?? [])
   const available = $derived(roster?.available ?? [])
-  const locals = $derived(members.filter((m) => m.local))
-  const joined = $derived(members.filter((m) => !m.local))
+  // まだ有効でないものは由来で分ける。共通の定義を持っているのは設定画面で、
+  // チームの定義を作って直すのはここ。操作が違うので、欄も分かれる。
+  const freeCommon = $derived(available.filter((a) => a.scope !== 'team'))
+  const freeTeam = $derived(available.filter((a) => a.scope === 'team'))
+  // 有効になっているチームエージェントも、ここから直せる。共有物なので、
+  // 有効かどうかで編集できたりできなかったりするのは筋が通らない。
+  const teamMembers = $derived(members.filter((m) => m.scope === 'team'))
+  // ID は共通とチームを通して一意。作るときはその全部を避ける。
   const takenIds = $derived([...members.map((m) => m.id), ...available.map((a) => a.id)])
 
   // 終了は既定で出さない。終わった仕事が並ぶと、残っているものが埋もれる。
   let showClosed = $state(false)
-  let open = $state({ common: true, local: true, tickets: true })
+  let open = $state({ members: true, common: true, team: true, tickets: true })
   let editing = $state(null)
   let pendingDelete = $state(null)
   let detail = $state(null)
@@ -127,23 +138,10 @@
     }
   }
 
-  async function join(id, on) {
-    const r = await guard(() => api.joinMember(sessionId, id, on))
+  // この会話で使うかどうかを切り替える。定義そのものには触れない。
+  async function enable(id, on) {
+    const r = await guard(() => api.enableMember(sessionId, id, on))
     if (r) onRoster(r)
-  }
-
-  // 窓口を移す。移さないかぎり、いまの窓口は外せない — 宛先の無い発言の
-  // 行き先が消えるためである。移せることが、規定エージェントを外す道になる。
-  async function makeLead(id) {
-    busy = true
-    error = null
-    try {
-      onRoster(await onLead(id))
-    } catch (e) {
-      error = e.message
-    } finally {
-      busy = false
-    }
   }
 
   async function copy(id) {
@@ -151,9 +149,19 @@
     if (r) onRoster(r)
   }
 
-  async function removeLocal(id) {
+  // 定義を消す。有効にしている全ての会話から居なくなる。
+  //
+  // 消しても名簿からは掃除しないので、引き直した名簿には「定義が見つかり
+  // ません」が 1 件出る。何が消えたのかが見えるほうが、黙って減るよりよい。
+  async function removeAgent(id) {
     pendingDelete = null
-    const r = await guard(() => api.deleteSessionAgent(sessionId, id))
+    if (await guard(() => api.deleteTeamAgent(id).then(() => true))) await reload()
+  }
+
+  // 名簿を引き直す。共有物への操作 (編集・削除) は会話に紐づいていないので、
+  // 名簿を返さない。
+  async function reload() {
+    const r = await guard(() => api.getRoster(sessionId))
     if (r) onRoster(r)
   }
 
@@ -216,68 +224,87 @@
   ></div>
 
   <section>
-    <button class="head" onclick={() => (open.common = !open.common)} aria-expanded={open.common}>
-      <span class="caret" class:on={open.common}></span>共通エージェント
-      <span class="n">{joined.length} / {joined.length + available.length}</span>
+    <button class="head" onclick={() => (open.members = !open.members)} aria-expanded={open.members}>
+      <span class="caret" class:on={open.members}></span>この会話のメンバー
+      <span class="n">{members.length}</span>
     </button>
-    {#if open.common}
+    {#if open.members}
       <p class="lede">
-        参加させると、この会話で宛先に選べます。定義を直せば、参加している全てのチームに効きます。
-        宛先を書かない発言は窓口へ届くので、外したい相手が窓口なら先に窓口を移してください。
+        @ で宛先に選べるのはここに居る人だけです。並びは Tier 順で、メンション補完もこの順に出ます。
       </p>
-      {#each joined as m (m.id)}
+      {#each members as m (m.id)}
         <div class="row">
           <span class="dot" style:background={whoColor(m.id, colorOf)}></span>
           <span class="id">{m.id}</span>
           <span class="tier">T{m.tier}</span>
-          {#if m.lead}<span class="lead">窓口</span>{/if}
-          {#if !m.lead}
-            <button class="quiet" disabled={busy} onclick={() => makeLead(m.id)}>窓口に</button>
-          {/if}
-          <button class="quiet" disabled={busy || m.lead} onclick={() => join(m.id, false)}>
-            外す
-          </button>
-          <button class="quiet" disabled={busy} onclick={() => copy(m.id)}>コピー</button>
-        </div>
-      {/each}
-      {#each available as a (a.id)}
-        <div class="row off">
-          <span class="dot" style:background={whoColor(a.id, colorOf)}></span>
-          <span class="id">{a.id}</span>
-          <span class="tier">T{a.tier}</span>
-          <button class="quiet" disabled={busy} onclick={() => join(a.id, true)}>参加</button>
-          <button class="quiet" disabled={busy} onclick={() => copy(a.id)}>コピー</button>
+          <span class="from">{m.scope === 'team' ? 'チーム' : '共通'}</span>
+          <button class="quiet" disabled={busy} onclick={() => enable(m.id, false)}>外す</button>
         </div>
       {:else}
-        {#if joined.length === 0}<p class="empty">共通エージェントがありません。</p>{/if}
+        <p class="empty">まだ誰も居ません。下の欄から足してください。</p>
       {/each}
     {/if}
   </section>
 
   <section>
-    <button class="head" onclick={() => (open.local = !open.local)} aria-expanded={open.local}>
-      <span class="caret" class:on={open.local}></span>固有エージェント
-      <span class="n">{locals.length}</span>
+    <button class="head" onclick={() => (open.common = !open.common)} aria-expanded={open.common}>
+      <span class="caret" class:on={open.common}></span>共通エージェント
+      <span class="n">{freeCommon.length}</span>
     </button>
-    {#if open.local}
-      <p class="lede">この会話の中だけに居ます。会話を消せば一緒に消えます。</p>
-      {#each locals as m (m.id)}
+    {#if open.common}
+      <p class="lede">
+        直列の会話でも使う定義です。直すのは設定画面から。この会話のためだけに変えたいなら、
+        チームへコピーしてください。
+      </p>
+      {#each freeCommon as a (a.id)}
+        <div class="row off">
+          <span class="dot" style:background={whoColor(a.id, colorOf)}></span>
+          <span class="id">{a.id}</span>
+          <span class="tier">T{a.tier}</span>
+          <button class="quiet" disabled={busy} onclick={() => enable(a.id, true)}>参加</button>
+          <button class="quiet" disabled={busy} onclick={() => copy(a.id)}>チームへコピー</button>
+        </div>
+      {:else}
+        <p class="empty">
+          {members.length > 0 ? '残りはありません。' : '共通エージェントがありません。'}
+        </p>
+      {/each}
+    {/if}
+  </section>
+
+  <section>
+    <button class="head" onclick={() => (open.team = !open.team)} aria-expanded={open.team}>
+      <span class="caret" class:on={open.team}></span>チームエージェント
+      <span class="n">{teamMembers.length + freeTeam.length}</span>
+    </button>
+    {#if open.team}
+      <p class="lede">
+        <strong>すべてのチーム会話で共有されます。</strong>
+        直せば、有効にしている全ての会話に効きます。削除すると、全ての会話から居なくなります。
+      </p>
+      {#each teamMembers as m (m.id)}
         <div class="row">
           <span class="dot" style:background={whoColor(m.id, colorOf)}></span>
           <span class="id">{m.id}</span>
           <span class="tier">T{m.tier}</span>
-          {#if m.lead}<span class="lead">窓口</span>{/if}
-          {#if !m.lead}
-            <button class="quiet" disabled={busy} onclick={() => makeLead(m.id)}>窓口に</button>
-          {/if}
+          <span class="from on">この会話</span>
           <button class="quiet" onclick={() => (editing = { agent: m })}>編集</button>
-          <button class="quiet" disabled={busy || m.lead} onclick={() => (pendingDelete = m)}>
-            削除
-          </button>
+          <button class="quiet" disabled={busy} onclick={() => (pendingDelete = m)}>削除</button>
         </div>
-      {:else}
-        <p class="empty">まだ居ません。</p>
       {/each}
+      {#each freeTeam as a (a.id)}
+        <div class="row off">
+          <span class="dot" style:background={whoColor(a.id, colorOf)}></span>
+          <span class="id">{a.id}</span>
+          <span class="tier">T{a.tier}</span>
+          <button class="quiet" disabled={busy} onclick={() => enable(a.id, true)}>有効化</button>
+          <button class="quiet" onclick={() => (editing = { agent: a })}>編集</button>
+          <button class="quiet" disabled={busy} onclick={() => (pendingDelete = a)}>削除</button>
+        </div>
+      {/each}
+      {#if teamMembers.length + freeTeam.length === 0}
+        <p class="empty">まだ居ません。</p>
+      {/if}
       <button class="add" onclick={() => (editing = { agent: null })}>＋ 新しく作る</button>
     {/if}
   </section>
@@ -363,7 +390,8 @@
     {models}
     onDone={(r) => {
       editing = null
-      onRoster(r)
+      if (r) onRoster(r)
+      else reload()
     }}
     onCancel={() => (editing = null)}
   />
@@ -373,9 +401,9 @@
   <Confirm
     title="この担当を消しますか"
     body={pendingDelete.id}
-    note="定義だけが消えます。この会話に残っている発言はそのままです。"
+    note="定義が消え、有効にしている全ての会話から居なくなります。発言とチケットはそのままです。"
     confirmLabel="削除する"
-    onConfirm={() => removeLocal(pendingDelete.id)}
+    onConfirm={() => removeAgent(pendingDelete.id)}
     onCancel={() => (pendingDelete = null)}
   />
 {/if}
@@ -510,14 +538,13 @@
     white-space: nowrap;
   }
   .tier { flex: none; color: var(--g9); font-size: 10px; }
-  .lead {
+  /* 由来の印。押せる場所と間違えられないよう、枠は付けない。 */
+  .from {
     flex: none;
-    padding: 0 4px;
-    border: 1px solid var(--accent-line);
-    border-radius: 999px;
-    color: var(--accent-line);
+    color: var(--g9);
     font-size: 9px;
   }
+  .from.on { color: var(--accent-line); }
   .row button {
     flex: none;
     padding: 0 5px;

@@ -172,8 +172,8 @@ describe('チームのメッセージの描画', () => {
 
 describe('宛先の候補', () => {
   const members = [
-    { id: 'lead', name: 'Lead', tier: 1, lead: true },
-    { id: 'hand', name: 'Hand', tier: 2, lead: false },
+    { id: 'lead', name: 'Lead', tier: 1, scope: 'common' },
+    { id: 'hand', name: 'Hand', tier: 2, scope: 'team' },
   ]
 
   function render(over = {}) {
@@ -185,7 +185,7 @@ describe('宛先の候補', () => {
       props: {
         commands: [{ name: 'compact', desc: 'まとめる' }],
         members,
-        leadId: 'lead',
+        showAgents: false,
         agents: [],
         agentId: '',
         usage: null,
@@ -210,11 +210,12 @@ describe('宛先の候補', () => {
     document.body.innerHTML = ''
   })
 
-  it('@ で名簿を出す。判断を委ねる * が先頭に来る', () => {
+  // 判断を委ねる "*" は無い。誰に頼むかを決めるのは利用者である (#640275)。
+  it('@ で名簿を出す。委ねる先は候補に無い', () => {
     const { target, area, app } = render()
     type(area, '@')
     const names = [...target.querySelectorAll('.cname')].map((e) => e.textContent)
-    expect(names).toEqual(['@*', '@lead', '@hand'])
+    expect(names).toEqual(['@lead', '@hand'])
     unmount(app)
   })
 
@@ -263,9 +264,53 @@ describe('宛先の候補', () => {
     unmount(app)
   })
 
-  it('宛先を書かなければ窓口へ届くと伝える', () => {
-    const { target, app } = render()
-    expect(target.querySelector('.hint').textContent).toContain('lead')
+  // 宛先の無い発言は届かない。送ってから断られると、画面が先に置いた
+  // 吹き出しだけが残って再読込で消えるので、押させない。
+  it('宛先を書かないうちは送れない', () => {
+    const { target, area, sent, app } = render()
+    type(area, '調べて')
+    expect(target.querySelector('.hint').textContent).toContain('@ で宛先')
+    expect(target.querySelector('.go').disabled).toBe(true)
+    area.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+    )
+    flushSync()
+    expect(sent).toEqual([])
+    unmount(app)
+  })
+
+  it('@ を打てば送れる', () => {
+    const { target, area, sent, app } = render()
+    type(area, '@hand 調べて')
+    expect(target.querySelector('.go').disabled).toBe(false)
+    area.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+    )
+    flushSync()
+    expect(sent).toEqual(['@hand 調べて'])
+    unmount(app)
+  })
+
+  // 1 人しか居なければ迷う余地が無い。そこで宛先を強いるのは、答えの
+  // 決まっている問いを毎回出すのと同じである。
+  it('名簿が 1 人なら宛先を書かなくても送れる', () => {
+    const { target, area, sent, app } = render({ members: [members[1]] })
+    type(area, '調べて')
+    expect(target.querySelector('.hint').textContent).toContain('hand')
+    expect(target.querySelector('.go').disabled).toBe(false)
+    area.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+    )
+    flushSync()
+    expect(sent).toEqual(['調べて'])
+    unmount(app)
+  })
+
+  // コマンドは宛先を持たない。ここで止めると /compact が打てなくなる。
+  it('コマンドは宛先が無くても送れる', () => {
+    const { target, area, app } = render()
+    type(area, '/compact')
+    expect(target.querySelector('.go').disabled).toBe(false)
     unmount(app)
   })
 })
@@ -284,10 +329,10 @@ describe('チームでの入力欄の相手', () => {
         session: { id: 's1', title: 'チーム', agent_id: 'boss', kind: 'team' },
         agents: [{ id: 'general', name: 'General' }],
         members: [
-          { id: 'boss', name: 'Boss', tier: 0, lead: true },
-          { id: 'hand', name: 'Hand', tier: 2, lead: false },
+          { id: 'boss', name: 'Boss', tier: 0, scope: 'team' },
+          { id: 'hand', name: 'Hand', tier: 2, scope: 'team' },
         ],
-        leadId: 'boss',
+        roster: { members: [], available: [], errors: [] },
         isTeam: true,
         items: [],
         busy: false,
@@ -317,19 +362,20 @@ describe('チームでの入力欄の相手', () => {
     return { target, app }
   }
 
-  // 窓口はこの会話の名簿から選ぶ。共通の一覧を出すと、居ない相手を窓口に
-  // しようとして断られる (#731906)。
-  it('選べるのは名簿のメンバーだけ', () => {
+  // チームで答え手を選ぶ欄は無い。宛先はメンションで決まるので、選ばせる
+  // 欄があること自体が誤りになる (#640275)。
+  it('相手を選ぶ欄を出さない', () => {
     const { target, app } = render()
-    const opts = [...target.querySelectorAll('.who option')].map((o) => o.value)
-    expect(opts).toEqual(['boss', 'hand'])
+    expect(target.querySelector('.who')).toBe(null)
     unmount(app)
   })
 
-  // 窓口が固有のエージェントでも、共通の一覧に無いことを理由に送信を
-  // 止めない。
-  it('固有の担当が窓口でも送信を止めない', () => {
-    const { target, app } = render()
+  // session.agent_id は会話を作ったときの記録で、実行では読まない。見ると
+  // 名簿に居ないことを理由に、いつでも送信が止まる。
+  it('agent_id が名簿に無くても止めない', () => {
+    const { target, app } = render({
+      session: { id: 's1', title: 'チーム', agent_id: 'gone', kind: 'team' },
+    })
     expect(target.querySelector('.banner')).toBe(null)
     expect(target.querySelector('textarea').disabled).toBe(false)
     unmount(app)
@@ -337,17 +383,158 @@ describe('チームでの入力欄の相手', () => {
 
   // 名簿が届く前に「居ない」と言わない。開くたびに帯が明滅する。
   it('名簿が届く前は騒がない', () => {
-    const { target, app } = render({ members: [] })
+    const { target, app } = render({ members: [], roster: null })
     expect(target.querySelector('.banner')).toBe(null)
+    unmount(app)
+  })
+
+  // 空になったら止める。宛先が 1 つも無いので、送っても届く先が無い。
+  it('名簿が空なら帯を出して止める', () => {
+    const { target, app } = render({ members: [] })
+    expect(target.querySelector('.banner').textContent).toContain('メンバーが 1 人も居ません')
+    expect(target.querySelector('textarea').disabled).toBe(true)
+    unmount(app)
+  })
+})
+
+// 右パネルの名簿は 4 つの欄に分かれる。有効になっているものを 1 つの欄に
+// まとめるのは、「@ を打つと誰が出るのか」に画面の 1 か所が答えられるように
+// するためである (#731906)。
+describe('右パネルの名簿', () => {
+  const roster = {
+    members: [
+      { id: 'boss', name: 'Boss', tier: 0, scope: 'team' },
+      { id: 'general', name: 'General', tier: 1, scope: 'common' },
+    ],
+    available: [
+      { id: 'writer', name: 'Writer', tier: 2, scope: 'common' },
+      { id: 'scout', name: 'Scout', tier: 3, scope: 'team' },
+    ],
+    errors: [],
+  }
+
+  function render(over = {}) {
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+    const app = mount(TeamPanel, {
+      target,
+      props: {
+        sessionId: 's1',
+        roster,
+        tickets: [],
+        models: [],
+        colorOf: () => '',
+        onRoster: () => {},
+        onTickets: async () => {},
+        ...over,
+      },
+    })
+    flushSync()
+    return { target, app }
+  }
+
+  const heads = (t) =>
+    [...t.querySelectorAll('.head')].map((e) => e.textContent.replace(/\s*\d+\s*$/, '').trim())
+
+  const rows = (t, i) =>
+    [...t.querySelectorAll('section')[i].querySelectorAll('.id')].map((e) => e.textContent)
+
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  it('欄は メンバー / 共通 / チーム / チケット の 4 つ', () => {
+    const { target, app } = render()
+    expect(heads(target)).toEqual([
+      'この会話のメンバー',
+      '共通エージェント',
+      'チームエージェント',
+      'チケット',
+    ])
+    unmount(app)
+  })
+
+  // 由来で割ると、@ の候補を知るのに 2 か所を見て頭の中で合成することになる。
+  it('有効なものは由来を問わず 1 つの欄に並ぶ', () => {
+    const { target, app } = render()
+    expect(rows(target, 0)).toEqual(['boss', 'general'])
+    unmount(app)
+  })
+
+  it('メンバーには由来の印が付く', () => {
+    const { target, app } = render()
+    const from = [...target.querySelectorAll('section')[0].querySelectorAll('.from')]
+    expect(from.map((e) => e.textContent)).toEqual(['チーム', '共通'])
+    unmount(app)
+  })
+
+  // 有効になっているチームエージェントも、ここから直せる。共有物なので、
+  // 有効かどうかで編集できたりできなかったりするのは筋が通らない。
+  it('チームの欄には有効なものも未有効なものも並ぶ', () => {
+    const { target, app } = render()
+    expect(rows(target, 2)).toEqual(['boss', 'scout'])
+    unmount(app)
+  })
+
+  it('共通の欄には未有効なものだけ並ぶ', () => {
+    const { target, app } = render()
+    expect(rows(target, 1)).toEqual(['writer'])
+    unmount(app)
+  })
+
+  // 窓口は無い。宛先はメンションで決まるので、指名する場所も要らない。
+  it('窓口の印も、窓口にする手も無い', () => {
+    const { target, app } = render()
+    expect(target.textContent).not.toContain('窓口')
+    unmount(app)
+  })
+
+  // 名簿が空になることは許す。空だと送るときに止まり、直す場所は目の前にある。
+  it('規定のエージェントも外せる', () => {
+    const called = []
+    const { target, app } = render({
+      roster: {
+        members: [{ id: 'general', name: 'General', tier: 0, scope: 'common' }],
+        available: [],
+        errors: [],
+      },
+      onRoster: (r) => called.push(r),
+    })
+    const off = [...target.querySelectorAll('section')[0].querySelectorAll('button')].find(
+      (b) => b.textContent.trim() === '外す',
+    )
+    expect(off).not.toBe(undefined)
+    expect(off.disabled).toBe(false)
+    unmount(app)
+  })
+
+  // いままで黙って 1 会話にしか効かなかったものが、黙って全部に効くように
+  // なる。そこは黙ってはいけない。
+  it('チームの欄は共有であることを言う', () => {
+    const { target, app } = render()
+    const lede = target.querySelectorAll('section')[2].querySelector('.lede').textContent
+    expect(lede).toContain('すべてのチーム会話で共有されます')
+    expect(lede).toContain('全ての会話から居なくなります')
+    unmount(app)
+  })
+
+  it('削除の確認も全ての会話から消えると言う', () => {
+    const { target, app } = render()
+    const del = [...target.querySelectorAll('section')[2].querySelectorAll('button')].find(
+      (b) => b.textContent.trim() === '削除',
+    )
+    del.click()
+    flushSync()
+    const box = document.querySelector('[role="alertdialog"]')
+    expect(box.textContent).toContain('全ての会話から居なくなります')
     unmount(app)
   })
 })
 
 describe('チケットのカード', () => {
   const roster = {
-    members: [{ id: 'boss', name: 'Boss', tier: 0, lead: true, local: false }],
+    members: [{ id: 'boss', name: 'Boss', tier: 0, scope: 'common' }],
     available: [],
-    lead_id: 'boss',
     errors: [],
   }
 
@@ -379,7 +566,6 @@ describe('チケットのカード', () => {
         colorOf: () => '',
         onRoster: () => {},
         onTickets: async () => {},
-        onLead: async () => roster,
       },
     })
     flushSync()
@@ -499,7 +685,7 @@ describe('チケットのカード', () => {
 })
 
 describe('右パネルの幅', () => {
-  const roster = { members: [], available: [], lead_id: '', errors: [] }
+  const roster = { members: [], available: [], errors: [] }
 
   function render(over = {}) {
     const target = document.createElement('div')
@@ -515,7 +701,6 @@ describe('右パネルの幅', () => {
         colorOf: () => '',
         onRoster: () => {},
         onTickets: async () => {},
-        onLead: async () => roster,
         width: 264,
         bounds: { min: 200, max: 620, base: 264 },
         onResize: (px) => sized.push(px),
